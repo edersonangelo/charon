@@ -92,6 +92,9 @@ func (s *Store) Record(ctx context.Context, req inbound.Request) error {
 	if err := q.NotifyWork(ctx); err != nil {
 		return fmt.Errorf("announcing the inbound record: %w", err)
 	}
+	if err := q.NotifyPanel(ctx); err != nil {
+		return fmt.Errorf("announcing the inbound record to the panel: %w", err)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing the inbound record: %w", err)

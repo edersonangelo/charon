@@ -33,7 +33,7 @@ func TestRoutes(t *testing.T) {
 			t.Parallel()
 
 			mux := http.NewServeMux()
-			health.New(fakePinger{err: tt.pingErr}, 0).Register(mux)
+			health.New(fakePinger{err: tt.pingErr}).Register(mux)
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil)
 			rec := httptest.NewRecorder()

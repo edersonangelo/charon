@@ -23,6 +23,19 @@ type Delivery struct {
 	LastError     pgtype.Text
 	DeliveredAt   pgtype.Timestamptz
 	CreatedAt     time.Time
+	ReplayCount   int32
+	ReplayedAt    pgtype.Timestamptz
+}
+
+type DeliveryAttempt struct {
+	ID          uuid.UUID
+	DeliveryID  uuid.UUID
+	Attempt     int32
+	AttemptedAt time.Time
+	Status      pgtype.Int4
+	Error       pgtype.Text
+	DurationMs  int32
+	Round       int32
 }
 
 type Destination struct {
@@ -46,6 +59,21 @@ type InboundRequest struct {
 	EventID uuid.UUID
 	Headers []byte
 	Body    []byte
+}
+
+type PanelSession struct {
+	Token     []byte
+	UserID    uuid.UUID
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+type PanelUser struct {
+	ID           uuid.UUID
+	Email        string
+	PasswordHash pgtype.Text
+	CreatedAt    time.Time
+	OidcSubject  pgtype.Text
 }
 
 type Route struct {

@@ -25,7 +25,7 @@ where id in (
     limit $2
     for update skip locked
 )
-returning id, event_id, destination_id, attempts
+returning id, event_id, destination_id, attempts, replay_count
 `
 
 type ClaimDeliveriesParams struct {
@@ -38,6 +38,7 @@ type ClaimDeliveriesRow struct {
 	EventID       uuid.UUID
 	DestinationID uuid.UUID
 	Attempts      int32
+	ReplayCount   int32
 }
 
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
@@ -54,6 +55,7 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 			&i.EventID,
 			&i.DestinationID,
 			&i.Attempts,
+			&i.ReplayCount,
 		); err != nil {
 			return nil, err
 		}

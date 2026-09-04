@@ -7,6 +7,8 @@ GOLANGCI_VERSION ?= latest
 GOLANGCI         := $(BIN)/golangci-lint
 SQLC             := $(BIN)/sqlc
 SQLC_VERSION     ?= latest
+TEMPL            := $(BIN)/templ
+TEMPL_VERSION    ?= latest
 
 .DEFAULT_GOAL := help
 .PHONY: help tools generate generate-check fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean
@@ -17,15 +19,21 @@ help: ## Show available targets
 tools: ## Install dev tools into ./bin
 	GOBIN=$(BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	GOBIN=$(BIN) $(GO) install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+	GOBIN=$(BIN) $(GO) install github.com/a-h/templ/cmd/templ@$(TEMPL_VERSION)
 
-generate: $(SQLC) ## Regenerate the database layer from migrations and queries
+generate: $(SQLC) $(TEMPL) ## Regenerate the database layer and the templates
 	$(SQLC) generate
+	$(TEMPL) generate --log-level error
 
-generate-check: generate ## Fail if the committed generated code is stale
-	@git diff --exit-code -- internal/store/db \
-		|| { echo "generated code is stale: run 'make generate' and commit the result"; exit 1; }
+generate-check: ## Fail if regenerating would change anything
+	before="$$(find internal/postgres/db internal/web -name '*.go' -exec shasum {} + | shasum)"; \
+	$(MAKE) --no-print-directory generate >/dev/null; \
+	after="$$(find internal/postgres/db internal/web -name '*.go' -exec shasum {} + | shasum)"; \
+	if [ "$$before" != "$$after" ]; then \
+	  echo "generated code is stale: run 'make generate' and commit the result"; exit 1; \
+	fi
 
-$(SQLC):
+$(SQLC) $(TEMPL):
 	$(MAKE) tools
 
 fmt: ## Format all code

@@ -45,6 +45,11 @@ linters:
         linters:
           - gosec
           - errcheck
+      # contextcheck follows the call into templ's generated renderers, which
+      # do receive and pass the context.
+      - path: internal/web/
+        linters:
+          - contextcheck
 
 formatters:
   enable:

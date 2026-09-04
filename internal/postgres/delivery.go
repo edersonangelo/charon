@@ -15,7 +15,10 @@ import (
 	"github.com/edersonangelo/charon/internal/postgres/db"
 )
 
-var ErrNoDestination = errors.New("no destination with that name")
+var (
+	ErrNoDestination = errors.New("no destination with that name")
+	ErrAlreadyRouted = errors.New("this provider already delivers to that url")
+)
 
 // Creates the delivery rows a recorded event is owed, one per enabled route
 // for its provider. Runs after ingestion so that the inbound port never has to
@@ -101,6 +104,7 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 			ID:       row.ID,
 			EventID:  row.EventID,
 			Attempts: row.Attempts,
+			Replays:  row.ReplayCount,
 			URL:      target.Url,
 			Provider: target.Provider,
 			Headers:  headers,
@@ -117,7 +121,21 @@ func (s *Store) MarkDelivered(ctx context.Context, id uuid.UUID, status int) err
 	}); err != nil {
 		return fmt.Errorf("marking delivery %s delivered: %w", id, err)
 	}
+	s.announceToPanel(ctx)
 	return nil
+}
+
+// The panel is told about every change so an open page does not have to ask.
+// A failure here is not worth surfacing: the worst case is a page that updates
+// on its next interaction.
+func (s *Store) announceToPanel(ctx context.Context) {
+	_ = s.q.NotifyPanel(ctx)
+}
+
+// Wake-ups for the panel: a recorded event, a delivery that changed state, a
+// replay. Closed when ctx is done.
+func (s *Store) PanelChanges(ctx context.Context) <-chan struct{} {
+	return s.listenOn(ctx, "charon_panel")
 }
 
 func (s *Store) MarkFailed(
@@ -142,6 +160,7 @@ func (s *Store) MarkFailed(
 	}); err != nil {
 		return fmt.Errorf("marking delivery %s failed: %w", id, err)
 	}
+	s.announceToPanel(ctx)
 	return nil
 }
 
@@ -172,6 +191,16 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 		return fmt.Errorf("reading destination %q: %w", destination, err)
 	}
 
+	taken, err := q.ProviderAlreadyRoutedTo(ctx, db.ProviderAlreadyRoutedToParams{
+		Provider: provider, Url: url,
+	})
+	if err != nil {
+		return fmt.Errorf("checking existing routes for %q: %w", provider, err)
+	}
+	if taken {
+		return ErrAlreadyRouted
+	}
+
 	routeID, err := uuid.NewV7()
 	if err != nil {
 		return fmt.Errorf("generating a route id: %w", err)
@@ -182,10 +211,20 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 		return fmt.Errorf("creating the route: %w", err)
 	}
 
+	// Routes are evaluated once per event. Without unplanning, a route added
+	// after an event was planned would never reach it, and there would be no
+	// delivery row to resend either.
+	if _, err := q.UnplanProvider(ctx, provider); err != nil {
+		return fmt.Errorf("reopening planning for %q: %w", provider, err)
+	}
+
 	// A new route can make events that were waiting for one deliverable, and
 	// nothing else would announce that.
 	if err := q.NotifyWork(ctx); err != nil {
 		return fmt.Errorf("announcing the route: %w", err)
+	}
+	if err := q.NotifyPanel(ctx); err != nil {
+		return fmt.Errorf("announcing the route to the panel: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -248,13 +287,17 @@ func (s *Store) NextWorkAt(ctx context.Context) (time.Time, bool, error) {
 // is done. A lost notification is not an error here: the dispatcher's safety
 // interval catches whatever a notification failed to announce.
 func (s *Store) Notifications(ctx context.Context) <-chan struct{} {
+	return s.listenOn(ctx, "charon_work")
+}
+
+func (s *Store) listenOn(ctx context.Context, channel string) <-chan struct{} {
 	woken := make(chan struct{}, 1)
 
 	go func() {
 		defer close(woken)
 
 		for ctx.Err() == nil {
-			if err := s.listen(ctx, woken); err != nil && ctx.Err() == nil {
+			if err := s.listen(ctx, channel, woken); err != nil && ctx.Err() == nil {
 				select {
 				case <-ctx.Done():
 				case <-time.After(time.Second):
@@ -266,15 +309,15 @@ func (s *Store) Notifications(ctx context.Context) <-chan struct{} {
 	return woken
 }
 
-func (s *Store) listen(ctx context.Context, woken chan<- struct{}) error {
+func (s *Store) listen(ctx context.Context, channel string, woken chan<- struct{}) error {
 	conn, err := pgx.Connect(ctx, s.dsn)
 	if err != nil {
 		return fmt.Errorf("connecting to listen: %w", err)
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
-	if _, err := conn.Exec(ctx, "listen charon_work"); err != nil {
-		return fmt.Errorf("listening: %w", err)
+	if _, err := conn.Exec(ctx, "listen "+pgx.Identifier{channel}.Sanitize()); err != nil {
+		return fmt.Errorf("listening on %s: %w", channel, err)
 	}
 
 	for {

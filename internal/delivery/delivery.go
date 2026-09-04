@@ -23,6 +23,8 @@ type Queue interface {
 	MarkDelivered(ctx context.Context, id uuid.UUID, status int) error
 	MarkFailed(ctx context.Context, id uuid.UUID, nextAttempt time.Time,
 		status int, reason string, maxAttempts int) error
+	RecordAttempt(ctx context.Context, deliveryID uuid.UUID, attempt, status int,
+		reason string, took time.Duration) error
 	NextWorkAt(ctx context.Context) (time.Time, bool, error)
 	Notifications(ctx context.Context) <-chan struct{}
 }
@@ -31,14 +33,11 @@ type Config struct {
 	Workers        int
 	BatchSize      int
 	SafetyInterval time.Duration
-	MinWait        time.Duration
-	Lease          time.Duration
 	RequestTimeout time.Duration
 	MaxAttempts    int
 	BackoffBase    time.Duration
 	BackoffCap     time.Duration
 	Logger         *slog.Logger
-	Client         *http.Client
 }
 
 type Dispatcher struct {
@@ -58,14 +57,8 @@ func New(queue Queue, cfg Config) *Dispatcher {
 	if cfg.SafetyInterval <= 0 {
 		cfg.SafetyInterval = 30 * time.Second
 	}
-	if cfg.MinWait <= 0 {
-		cfg.MinWait = 50 * time.Millisecond
-	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 15 * time.Second
-	}
-	if cfg.Lease <= 0 {
-		cfg.Lease = cfg.RequestTimeout * 4
 	}
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 12
@@ -80,12 +73,12 @@ func New(queue Queue, cfg Config) *Dispatcher {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 
-	client := cfg.Client
-	if client == nil {
-		client = &http.Client{Timeout: cfg.RequestTimeout}
+	return &Dispatcher{
+		queue:  queue,
+		cfg:    cfg,
+		client: &http.Client{Timeout: cfg.RequestTimeout},
+		logger: cfg.Logger,
 	}
-
-	return &Dispatcher{queue: queue, cfg: cfg, client: client, logger: cfg.Logger}
 }
 
 func (d *Dispatcher) Run(ctx context.Context) error {
@@ -112,6 +105,11 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 
 	return nil
 }
+
+// How long a claim is held. Derived rather than configured: it only has to
+// outlast an attempt, so that a worker that dies leaves its rows to be picked
+// up again instead of stuck.
+func (d *Dispatcher) lease() time.Duration { return d.cfg.RequestTimeout * 4 }
 
 // A failed round is logged and picked up again on the next wake-up: a
 // transient database error must not take the dispatcher down.
@@ -142,8 +140,8 @@ func (d *Dispatcher) wait(ctx context.Context) time.Duration {
 		}
 	}
 
-	if wait < d.cfg.MinWait {
-		wait = d.cfg.MinWait
+	if wait < minimumWait {
+		wait = minimumWait
 	}
 	return wait
 }
@@ -154,7 +152,7 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("planning deliveries: %w", err)
 	}
 
-	deliveries, err := d.queue.Claim(ctx, d.cfg.BatchSize, d.cfg.Lease)
+	deliveries, err := d.queue.Claim(ctx, d.cfg.BatchSize, d.lease())
 	if err != nil {
 		return planned, fmt.Errorf("claiming deliveries: %w", err)
 	}
@@ -178,24 +176,38 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 
 // A delivery is closed as delivered only when the destination answers 2xx.
 func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
-	status, err := d.post(ctx, item)
+	attempts := int(item.Attempts) + 1
 
-	if err == nil && status >= 200 && status < 300 {
+	started := time.Now()
+	status, err := d.post(ctx, item)
+	took := time.Since(started)
+
+	accepted := err == nil && status >= 200 && status < 300
+
+	reason := ""
+	switch {
+	case err != nil:
+		reason = err.Error()
+	case !accepted:
+		reason = fmt.Sprintf("destination answered %d", status)
+	}
+
+	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, status, reason, took); recErr != nil {
+		d.logger.ErrorContext(ctx, "could not record a delivery attempt",
+			"delivery_id", item.ID, "error", recErr)
+	}
+
+	if accepted {
 		if markErr := d.queue.MarkDelivered(ctx, item.ID, status); markErr != nil {
 			d.logger.ErrorContext(ctx, "could not record a delivery",
 				"delivery_id", item.ID, "error", markErr)
 		}
 		d.logger.DebugContext(ctx, "delivered",
-			"delivery_id", item.ID, "event_id", item.EventID, "status", status)
+			"delivery_id", item.ID, "event_id", item.EventID,
+			"status", status, "took_ms", took.Milliseconds())
 		return
 	}
 
-	reason := fmt.Sprintf("destination answered %d", status)
-	if err != nil {
-		reason = err.Error()
-	}
-
-	attempts := int(item.Attempts) + 1
 	next := time.Now().UTC().Add(backoff(attempts, d.cfg.BackoffBase, d.cfg.BackoffCap))
 
 	if markErr := d.queue.MarkFailed(ctx, item.ID, next, status, reason, d.cfg.MaxAttempts); markErr != nil {
@@ -228,7 +240,11 @@ func (d *Dispatcher) post(ctx context.Context, item outbound.Delivery) (int, err
 	req.Header.Set("X-Charon-Delivery-Id", item.ID.String())
 	req.Header.Set("X-Charon-Event-Id", item.EventID.String())
 	req.Header.Set("X-Charon-Provider", item.Provider)
+	// Attempt counts within the current run; a replay opens a new run and
+	// starts over. Without the replay count a redelivery would look like a
+	// first attempt to whoever receives it.
 	req.Header.Set("X-Charon-Attempt", strconv.Itoa(int(item.Attempts)+1))
+	req.Header.Set("X-Charon-Replay", strconv.Itoa(int(item.Replays)))
 
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -268,3 +284,7 @@ func backoff(attempt int, base, limit time.Duration) time.Duration {
 	half := window / 2
 	return half + time.Duration(rand.Int64N(int64(half)+1)) //nolint:gosec // jitter, not a secret
 }
+
+// Floor on the sleep between rounds, so a delivery due in a microsecond does
+// not spin the loop.
+const minimumWait = 50 * time.Millisecond

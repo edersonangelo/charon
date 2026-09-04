@@ -28,16 +28,12 @@ const DefaultMaxBodyBytes int64 = 1 << 20
 
 type Config struct {
 	MaxBodyBytes int64
-	Now          func() time.Time
-	NewID        func() (uuid.UUID, error)
 	Logger       *slog.Logger
 }
 
 type Handler struct {
 	recorder Recorder
 	maxBody  int64
-	now      func() time.Time
-	newID    func() (uuid.UUID, error)
 	logger   *slog.Logger
 }
 
@@ -45,18 +41,10 @@ func New(recorder Recorder, cfg Config) *Handler {
 	h := &Handler{
 		recorder: recorder,
 		maxBody:  cfg.MaxBodyBytes,
-		now:      cfg.Now,
-		newID:    cfg.NewID,
 		logger:   cfg.Logger,
 	}
 	if h.maxBody <= 0 {
 		h.maxBody = DefaultMaxBodyBytes
-	}
-	if h.now == nil {
-		h.now = func() time.Time { return time.Now().UTC() }
-	}
-	if h.newID == nil {
-		h.newID = uuid.NewV7
 	}
 	if h.logger == nil {
 		h.logger = slog.New(slog.DiscardHandler)
@@ -92,7 +80,7 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := h.newID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		h.logger.ErrorContext(ctx, "could not generate an event id", "error", err)
 		http.Error(w, "could not record the request", http.StatusServiceUnavailable)
@@ -103,7 +91,7 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 		ID:         id,
 		Provider:   provider,
 		Path:       r.URL.Path,
-		ReceivedAt: h.now(),
+		ReceivedAt: time.Now().UTC(),
 		Headers:    r.Header.Clone(),
 		Body:       body,
 	}

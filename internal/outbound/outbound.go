@@ -6,6 +6,7 @@ type Delivery struct {
 	ID       uuid.UUID
 	EventID  uuid.UUID
 	Attempts int32
+	Replays  int32
 	URL      string
 	Provider string
 	Headers  map[string][]string

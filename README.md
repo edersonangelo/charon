@@ -8,11 +8,12 @@ Single binary, one PostgreSQL database, no other runtime dependencies.
 
 ## Status
 
-Pre-alpha. Ingestion and delivery work: Charon accepts a webhook, records it
-durably, acknowledges it only after that record is committed, then delivers it
-to the destinations routed for its provider, retrying with backoff until the
-destination answers `2xx` or the attempt limit is reached. There is no operator
-panel and no signature verification yet. See [Roadmap](#roadmap).
+Pre-alpha. Ingestion, delivery and the operator panel work: Charon accepts a
+webhook, records it durably, acknowledges it only after that record is
+committed, then delivers it to the destinations routed for its provider,
+retrying with backoff until the destination answers `2xx` or the attempt limit
+is reached. Every event and every attempt is searchable and replayable from the
+panel. There is no signature verification yet. See [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -50,11 +51,10 @@ Malformed bodies, unknown providers and unmapped event types are accepted and
 recorded too. The inbound port does not read the payload, so nothing about its
 content can cause a rejection.
 
-To see what was recorded:
+Create an operator and open the panel at <http://localhost:8080>:
 
 ```sh
-docker compose exec postgres psql -U charon -d charon \
-  -c 'select provider, body_size, received_at from inbound_event'
+docker compose run --rm charon user add -email you@example.com
 ```
 
 A [Postman collection](contrib/postman) covers every route and asserts its own
@@ -82,6 +82,7 @@ Binary releases, a published container image and `go install` support arrive at
 charon serve      Accept inbound webhooks and record them
 charon dispatch   Deliver recorded events to their destinations
 charon route      Manage where a provider's events are delivered
+charon user       Create an operator who can sign in to the panel
 charon migrate    Apply pending schema migrations and exit
 charon version    Print the build version
 ```
@@ -128,6 +129,62 @@ announced nothing — a replay, a manual change, an expired lease.
 | `-backoff-base` | `5s` | First retry window |
 | `-backoff-cap` | `1h` | Largest retry window |
 
+## Operator panel
+
+The panel is served by the same binary, on the same port, with no separate
+build step and no external assets. Sign in with an operator created by
+`charon user add`.
+
+- **Search** by provider, delivery state, time window, event identifier, or any
+  text inside the recorded body.
+- **Inspect** an event by clicking anywhere on its row, which opens the detail
+  in a dialog: its headers and raw body exactly as received, every delivery it
+  produced, and the full attempt history of each one — when it was tried, what
+  the destination answered, how long it took, and why it failed. Each row also
+  links to the same detail as its own page.
+- **Replay** a single delivery or every delivery of an event. A replay resets
+  the delivery to pending and announces it, so it is picked up immediately. It
+  does not erase the attempt history, and it unplans the event so a route added
+  since is included.
+
+Replaying is a real redelivery, not a simulation. The destination will receive
+the event again, which is the same situation described below.
+
+## Single sign-on
+
+The panel accepts any OpenID Connect provider, discovered from its issuer url.
+Local operators keep working alongside it, and nothing about single sign-on is
+gated: no licence key, no seat count, no call to any service this project
+controls.
+
+```sh
+CHARON_OIDC_ISSUER=https://keycloak.example.com/realms/main
+CHARON_OIDC_CLIENT_ID=charon
+CHARON_OIDC_CLIENT_SECRET=...
+CHARON_OIDC_REDIRECT_URL=https://charon.example.com/auth/sso/callback
+```
+
+The flow is authorization code with PKCE. The identity token is verified
+against the provider's keys, the nonce is checked against the one issued, and
+the email must be verified at the provider.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `-oidc-issuer` | — | Issuer url; discovery does the rest |
+| `-oidc-client-id` | — | Client registered at the provider |
+| `-oidc-client-secret` | — | Client secret, when the client is confidential |
+| `-oidc-redirect-url` | — | Must end in `/auth/sso/callback` |
+| `-oidc-scopes` | `openid,profile,email` | Scopes to request |
+| `-oidc-auto-provision` | off | Create an operator on first sign-on instead of requiring one to exist |
+| `-oidc-required-group` | — | Only accept accounts carrying this value in the `groups` claim |
+
+With auto-provisioning off — the default — someone who exists at the provider
+still cannot reach the panel until an operator with that address exists here.
+Signing on then links the account to the provider's subject.
+
+Discovery happens on first use, not at start, so an identity provider that is
+down or misconfigured never keeps the inbound port from serving.
+
 ## Delivery is at-least-once
 
 Charon guarantees a recorded event reaches its destination. It does not
@@ -169,7 +226,7 @@ sending traffic to.
 | 0 | Build, lint and test gate | done |
 | 1 | Durable ingestion | done |
 | 2 | Delivery loop: claim, retry, backoff, dead letter | done |
-| 3 | Operator panel: search, inspect, replay | |
+| 3 | Operator panel: search, inspect, replay | done |
 | 4 | Per-provider signature verification and correlation | |
 | 5 | OIDC login, authenticated delivery, metrics | |
 | 6 | `v0.1.0` release | |

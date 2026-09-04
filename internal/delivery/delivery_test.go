@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/postgres"
@@ -21,12 +22,19 @@ import (
 var body = []byte(`{"id":"evt_1","type":"charge.succeeded"}`)
 
 type destination struct {
-	mu       sync.Mutex
-	status   atomic.Int32
-	delay    atomic.Int64
-	calls    atomic.Int32
-	gotBody  []byte
-	gotEvent string
+	mu         sync.Mutex
+	status     atomic.Int32
+	delay      atomic.Int64
+	calls      atomic.Int32
+	gotBody    []byte
+	gotEvent   string
+	gotHeaders http.Header
+}
+
+func (d *destination) headers() http.Header {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gotHeaders
 }
 
 func (d *destination) handler() http.HandlerFunc {
@@ -43,6 +51,7 @@ func (d *destination) handler() http.HandlerFunc {
 		d.mu.Lock()
 		d.gotBody = received
 		d.gotEvent = r.Header.Get("X-Charon-Event-Id")
+		d.gotHeaders = r.Header.Clone()
 		d.mu.Unlock()
 
 		w.WriteHeader(int(d.status.Load()))
@@ -372,4 +381,42 @@ func waitForDelivered(t *testing.T, store *postgres.Store, want int64, within ti
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("delivered = %d after %v, want %d", states(t, store)["delivered"], within, want)
+}
+
+func TestARedeliveryIsNotAnnouncedAsAFirstAttempt(t *testing.T) {
+	t.Parallel()
+
+	store, dispatcher, target, _, _ := setup(t, delivery.Config{})
+	ctx := context.Background()
+
+	if _, err := dispatcher.Tick(ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := target.headers(); got.Get("X-Charon-Attempt") != "1" || got.Get("X-Charon-Replay") != "0" {
+		t.Fatalf("first delivery announced attempt %q replay %q, want 1 and 0",
+			got.Get("X-Charon-Attempt"), got.Get("X-Charon-Replay"))
+	}
+
+	events, err := store.SearchEvents(ctx, console.Filter{})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("reading the event back: %v", err)
+	}
+	if _, err := store.ReplayEvent(ctx, events[0].ID); err != nil {
+		t.Fatalf("replaying: %v", err)
+	}
+
+	for range 2 {
+		if _, err := dispatcher.Tick(ctx); err != nil {
+			t.Fatalf("tick after the replay: %v", err)
+		}
+	}
+
+	got := target.headers()
+	if got.Get("X-Charon-Attempt") != "1" {
+		t.Errorf("attempt = %q, want 1: a replay opens a new run", got.Get("X-Charon-Attempt"))
+	}
+	if got.Get("X-Charon-Replay") != "1" {
+		t.Errorf("replay = %q, want 1 so the destination can tell this is a redelivery",
+			got.Get("X-Charon-Replay"))
+	}
 }

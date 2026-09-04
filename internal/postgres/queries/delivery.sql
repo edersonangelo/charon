@@ -49,7 +49,7 @@ where id in (
     limit sqlc.arg(batch_size)
     for update skip locked
 )
-returning id, event_id, destination_id, attempts;
+returning id, event_id, destination_id, attempts, replay_count;
 
 -- name: DeliveryTarget :one
 select d.url, e.provider, e.path, r.headers, r.body

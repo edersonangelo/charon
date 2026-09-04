@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -16,24 +17,59 @@ type Querier interface {
 	CountDeliveriesByState(ctx context.Context) ([]CountDeliveriesByStateRow, error)
 	CountEventsAwaitingRoute(ctx context.Context) (int64, error)
 	CountInboundEvents(ctx context.Context) (int64, error)
+	CountPanelUsers(ctx context.Context) (int64, error)
 	CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error
 	CreateDestination(ctx context.Context, arg CreateDestinationParams) (Destination, error)
 	CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) error
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
+	CreatePanelSession(ctx context.Context, arg CreatePanelSessionParams) error
+	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) error
 	CreateRoute(ctx context.Context, arg CreateRouteParams) error
+	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
+	DeleteExpiredPanelSessions(ctx context.Context) error
+	DeletePanelSession(ctx context.Context, token []byte) error
+	DeleteRoute(ctx context.Context, id uuid.UUID) error
+	DeliveryAttempts(ctx context.Context, deliveryID uuid.UUID) ([]DeliveryAttemptsRow, error)
+	DeliveryStateTotals(ctx context.Context) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
 	DestinationByName(ctx context.Context, name string) (Destination, error)
+	DetailedRoutes(ctx context.Context) ([]DetailedRoutesRow, error)
+	DistinctProviders(ctx context.Context) ([]string, error)
 	EnabledDestinationsForProvider(ctx context.Context, provider string) ([]uuid.UUID, error)
+	EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]EventDeliveriesRow, error)
+	EventDetail(ctx context.Context, id uuid.UUID) (EventDetailRow, error)
 	GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, eventID uuid.UUID) (InboundRequest, error)
+	LinkSubjectToUser(ctx context.Context, arg LinkSubjectToUserParams) (PanelUser, error)
 	ListRecentInboundEvents(ctx context.Context, limit int32) ([]InboundEvent, error)
 	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
 	MarkDelivered(ctx context.Context, arg MarkDeliveredParams) error
 	MarkEventPlanned(ctx context.Context, id uuid.UUID) error
 	MarkFailed(ctx context.Context, arg MarkFailedParams) error
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
+	NotifyPanel(ctx context.Context) error
 	NotifyWork(ctx context.Context) error
 	OldestPendingAge(ctx context.Context) (float64, error)
+	PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error)
+	PanelUserByEmail(ctx context.Context, email string) (PanelUser, error)
+	PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Text) (PanelUser, error)
+	ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlreadyRoutedToParams) (bool, error)
+	RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error
+	// A replay only reopens deliveries whose destination is still routed for this
+	// event's provider and still enabled. Anything else is history: the routes page
+	// is the truth about where events go.
+	ReplayDelivery(ctx context.Context, id uuid.UUID) (int64, error)
+	ReplayDestination(ctx context.Context, destinationID uuid.UUID) (int64, error)
+	ReplayEvent(ctx context.Context, eventID uuid.UUID) (int64, error)
+	RouteByID(ctx context.Context, id uuid.UUID) (RouteByIDRow, error)
+	// The state counts only take deliveries whose destination is still routed and
+	// enabled, so the numbers reconcile with the routes page. What is left over is
+	// reported apart as history.
+	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
+	UnplanEvent(ctx context.Context, id uuid.UUID) error
+	UnplanProvider(ctx context.Context, provider string) (int64, error)
+	UnroutedProviders(ctx context.Context) ([]UnroutedProvidersRow, error)
+	UpdateDestination(ctx context.Context, arg UpdateDestinationParams) error
 }
 
 var _ Querier = (*Queries)(nil)

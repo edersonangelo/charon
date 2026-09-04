@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/edersonangelo/charon/internal/health"
 	"github.com/edersonangelo/charon/internal/ingest"
 	"github.com/edersonangelo/charon/internal/postgres"
+	"github.com/edersonangelo/charon/internal/web"
 )
 
 type serveConfig struct {
@@ -24,6 +26,9 @@ type serveConfig struct {
 	maxBodyBytes int64
 	logLevel     string
 	autoMigrate  bool
+	secureCookie bool
+	sessionTTL   time.Duration
+	oidc         web.OIDC
 }
 
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -55,7 +60,13 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		MaxBodyBytes: cfg.maxBodyBytes,
 		Logger:       logger,
 	}).Register(mux)
-	health.New(store, 0).Register(mux)
+	health.New(store).Register(mux)
+	web.New(store, web.Config{
+		SecureCookie: cfg.secureCookie,
+		SessionTTL:   cfg.sessionTTL,
+		OIDC:         cfg.oidc,
+		Logger:       logger,
+	}).Register(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.addr,
@@ -134,6 +145,9 @@ func migrate(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	return nil
 }
 
+var errIncompleteOIDC = errors.New(
+	"single sign-on needs -oidc-issuer, -oidc-client-id and -oidc-redirect-url together")
+
 var errMissingDatabaseURL = errors.New("a database url is required: pass -database-url or set CHARON_DATABASE_URL")
 
 func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
@@ -151,6 +165,26 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 		"debug, info, warn or error (env CHARON_LOG_LEVEL)")
 	fs.BoolVar(&cfg.autoMigrate, "migrate", true,
 		"apply pending migrations before serving")
+	fs.BoolVar(&cfg.secureCookie, "secure-cookie", false,
+		"mark the panel session cookie Secure; turn on behind HTTPS")
+	fs.DurationVar(&cfg.sessionTTL, "session-ttl", 12*time.Hour,
+		"how long an operator stays signed in to the panel")
+
+	fs.StringVar(&cfg.oidc.Issuer, "oidc-issuer", envOr("CHARON_OIDC_ISSUER", ""),
+		"OpenID Connect issuer url, for example https://keycloak/realms/main (env CHARON_OIDC_ISSUER)")
+	fs.StringVar(&cfg.oidc.ClientID, "oidc-client-id", envOr("CHARON_OIDC_CLIENT_ID", ""),
+		"OpenID Connect client id (env CHARON_OIDC_CLIENT_ID)")
+	fs.StringVar(&cfg.oidc.ClientSecret, "oidc-client-secret", envOr("CHARON_OIDC_CLIENT_SECRET", ""),
+		"OpenID Connect client secret (env CHARON_OIDC_CLIENT_SECRET)")
+	fs.StringVar(&cfg.oidc.RedirectURL, "oidc-redirect-url", envOr("CHARON_OIDC_REDIRECT_URL", ""),
+		"where the provider sends the operator back, ending in /auth/sso/callback (env CHARON_OIDC_REDIRECT_URL)")
+	scopes := fs.String("oidc-scopes", envOr("CHARON_OIDC_SCOPES", "openid,profile,email"),
+		"comma separated scopes to request (env CHARON_OIDC_SCOPES)")
+	fs.BoolVar(&cfg.oidc.AutoProvision, "oidc-auto-provision",
+		envOr("CHARON_OIDC_AUTO_PROVISION", "") != "",
+		"create an operator on first single sign-on instead of requiring one to exist (env CHARON_OIDC_AUTO_PROVISION)")
+	fs.StringVar(&cfg.oidc.RequiredGroup, "oidc-required-group", envOr("CHARON_OIDC_REQUIRED_GROUP", ""),
+		"only accept accounts carrying this value in the groups claim (env CHARON_OIDC_REQUIRED_GROUP)")
 
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, fmt.Errorf("parsing flags: %w", err)
@@ -158,6 +192,17 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 	if cfg.databaseURL == "" {
 		return serveConfig{}, errMissingDatabaseURL
 	}
+
+	for _, scope := range strings.Split(*scopes, ",") {
+		if trimmed := strings.TrimSpace(scope); trimmed != "" {
+			cfg.oidc.Scopes = append(cfg.oidc.Scopes, trimmed)
+		}
+	}
+
+	if cfg.oidc.Issuer != "" && !cfg.oidc.Configured() {
+		return serveConfig{}, errIncompleteOIDC
+	}
+
 	return cfg, nil
 }
 

@@ -1,0 +1,417 @@
+package web
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/edersonangelo/charon/internal/console"
+)
+
+templ eventsPage(events []console.EventSummary, providers []string, filter console.Filter) {
+	<h1>Events</h1>
+	@filters(providers, filter)
+	@eventsTable(events, filter)
+}
+
+templ filters(providers []string, filter console.Filter) {
+	<form class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
+		<input type="search" name="q" value={ filter.Search } placeholder="event id or text in body" size="32"/>
+		<select name="provider">
+			<option value="">any provider</option>
+			for _, provider := range providers {
+				if provider == filter.Provider {
+					<option value={ provider } selected>{ provider }</option>
+				} else {
+					<option value={ provider }>{ provider }</option>
+				}
+			}
+		</select>
+		<select name="state">
+			<option value="">any state</option>
+			for _, state := range deliveryStates {
+				if state.value == filter.State {
+					<option value={ state.value } selected>{ state.label }</option>
+				} else {
+					<option value={ state.value }>{ state.label }</option>
+				}
+			}
+		</select>
+		<input type="datetime-local" name="since" value={ localTime(filter.Since) } title="received from"/>
+		<input type="datetime-local" name="until" value={ localTime(filter.Until) } title="received until"/>
+		<button>search</button>
+		<a href="/events"><button type="button">clear</button></a>
+	</form>
+}
+
+templ eventsTable(events []console.EventSummary, filter console.Filter) {
+	<div id="events">
+		if len(events) == 0 {
+			<p class="muted">Nothing matches.</p>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>received</th>
+						<th>provider</th>
+						<th>size</th>
+						<th>deliveries</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, event := range events {
+						<tr data-open
+								hx-get={ "/events/" + event.ID.String() + "/fragment" }
+								hx-target="#detail-body" hx-swap="innerHTML">
+							<td>{ stamp(event.ReceivedAt) }</td>
+							<td>{ event.Provider }</td>
+							<td>{ fmt.Sprintf("%d B", event.BodySize) }</td>
+							<td>@deliveryCounts(event)</td>
+							<td onclick="event.stopPropagation()">
+								<button hx-post={ "/events/" + event.ID.String() + "/replay?view=list" }
+										hx-target="#events" hx-select="#events" hx-swap="outerHTML"
+										hx-include=".filters"
+										hx-confirm="Replay every delivery of this event?">replay</button>
+								<a href={ templ.SafeURL("/events/" + event.ID.String()) }><button type="button">open</button></a>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			@pager(len(events), filter)
+		}
+	</div>
+}
+
+templ deliveryCounts(event console.EventSummary) {
+	if event.Deliveries == 0 {
+		if event.Planned {
+			<span class="muted">none routed</span>
+		} else {
+			<span class="pending">awaiting a route</span>
+		}
+	} else {
+		if event.Delivered > 0 {
+			<span class="delivered">{ fmt.Sprintf("%d delivered", event.Delivered) }</span>
+		}
+		if event.Pending > 0 {
+			<span class="pending">{ fmt.Sprintf("%d pending", event.Pending) }</span>
+		}
+		if event.Dead > 0 {
+			<span class="dead">{ fmt.Sprintf("%d dead", event.Dead) }</span>
+		}
+		if event.Attempts > 1 {
+			<span class="muted">{ fmt.Sprintf("%d attempts", event.Attempts) }</span>
+		}
+	}
+	if event.Unrouted > 0 {
+		<span class="muted">{ fmt.Sprintf("%d no longer routed", event.Unrouted) }</span>
+	}
+}
+
+templ pager(count int, filter console.Filter) {
+	<p class="muted">
+		if filter.Page > 1 {
+			<a href={ templ.SafeURL(pageLink(filter, filter.Page-1)) }>previous</a>
+		}
+		{ fmt.Sprintf(" page %d ", max(filter.Page, 1)) }
+		if count == filter.Size() {
+			<a href={ templ.SafeURL(pageLink(filter, max(filter.Page, 1)+1)) }>next</a>
+		}
+	</p>
+}
+
+templ eventPage(event console.EventDetail, deliveries []console.Delivery) {
+	@eventDetail(event, deliveries, false)
+}
+
+templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inModal bool) {
+	<h1>
+		{ event.Provider } <span class="muted">{ event.ID.String() }</span>
+		if inModal {
+			<a href={ templ.SafeURL("/events/" + event.ID.String()) } class="muted">open full page</a>
+		}
+	</h1>
+	<section>
+		<table>
+			<tbody>
+				<tr><th>received</th><td>{ stamp(event.ReceivedAt) }</td></tr>
+				<tr><th>path</th><td>{ event.Path }</td></tr>
+				<tr><th>size</th><td>{ fmt.Sprintf("%d bytes", event.BodySize) }</td></tr>
+				<tr>
+					<th>planned</th>
+					<td>
+						if event.Planned {
+							yes
+						} else {
+							<span class="pending">no, awaiting a route</span>
+						}
+					</td>
+				</tr>
+			</tbody>
+		</table>
+	</section>
+	<section>
+		<h1>Deliveries
+			if inModal {
+				<button hx-post={ "/events/" + event.ID.String() + "/replay?view=fragment" }
+						hx-target="#detail-body" hx-swap="innerHTML"
+						hx-confirm="Replay every delivery of this event?">replay all</button>
+			} else {
+				<button hx-post={ "/events/" + event.ID.String() + "/replay" }
+						hx-target="body" hx-swap="outerHTML"
+						hx-confirm="Replay every delivery of this event?">replay all</button>
+			}
+		</h1>
+		if len(deliveries) == 0 {
+			<p class="muted">No delivery has been planned for this event.</p>
+		} else {
+			for _, delivery := range deliveries {
+				@deliveryBlock(event.ID.String(), delivery, inModal)
+			}
+		}
+	</section>
+	<section>
+		<h1>Headers</h1>
+		<pre>{ formatHeaders(event.Headers) }</pre>
+	</section>
+	<section>
+		<h1>
+			Body
+			<button type="button" onclick="copyBody(this)"
+					title="copies the body exactly as it was received">copy</button>
+		</h1>
+		if isJSON(event.Body) {
+			<pre class="code">{ prettyJSON(event.Body) }</pre>
+			<details>
+				<summary class="muted">raw, exactly as received</summary>
+				<pre class="raw-body">{ string(event.Body) }</pre>
+			</details>
+		} else {
+			<pre class="raw-body">{ string(event.Body) }</pre>
+		}
+	</section>
+}
+
+templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
+	<section>
+		<table>
+			<tbody>
+				<tr>
+					<th>{ delivery.Destination }</th>
+					<td class="wrap">
+						<span class={ delivery.State }>{ delivery.State }</span>
+						<span class="muted">{ fmt.Sprintf(" %d attempts", delivery.Attempts) }</span>
+						if delivery.ReplayCount > 0 {
+							<span class="pill">{ fmt.Sprintf("replayed %d×", delivery.ReplayCount) }</span>
+						}
+						if !delivery.Routed {
+							<span class="pill dead">no longer routed</span>
+						}
+						if delivery.Routed {
+							if inModal {
+								<button hx-post={ "/events/" + eventID + "/deliveries/" + delivery.ID.String() + "/replay?view=fragment" }
+										hx-target="#detail-body" hx-swap="innerHTML">replay</button>
+							} else {
+								<button hx-post={ "/events/" + eventID + "/deliveries/" + delivery.ID.String() + "/replay" }
+										hx-target="body" hx-swap="outerHTML">replay</button>
+							}
+						}
+						<br/>
+						<span class="muted">{ delivery.URL }</span>
+						if delivery.LastError != "" {
+							<br/><span class="dead">{ delivery.LastError }</span>
+						}
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		if len(delivery.Rounds) > 0 {
+			<details>
+				<summary class="muted">{ historySummary(delivery) }</summary>
+				for _, round := range delivery.Rounds {
+					<h1 class="muted">
+						{ round.Title() }
+						<span class="muted">{ fmt.Sprintf("%d attempts", len(round.Attempts)) }</span>
+					</h1>
+					<div class="scroll attempts">
+						<table>
+							<thead>
+								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>error</th></tr>
+							</thead>
+							<tbody>
+								for _, attempt := range round.Attempts {
+									<tr>
+										<td>{ fmt.Sprint(attempt.Attempt) }</td>
+										<td>{ stamp(attempt.AttemptedAt) }</td>
+										<td>
+											if attempt.Status > 0 {
+												{ fmt.Sprint(attempt.Status) }
+											} else {
+												<span class="muted">—</span>
+											}
+										</td>
+										<td>{ fmt.Sprintf("%d ms", attempt.DurationMs) }</td>
+										<td class="wrap">{ attempt.Error }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</details>
+		} else {
+			<p class="muted">Not attempted yet.</p>
+		}
+	</section>
+}
+
+var deliveryStates = []struct{ value, label string }{
+	{"delivered", "delivered"},
+	{"pending", "pending"},
+	{"dead", "dead"},
+	{"unrouted", "awaiting a route"},
+}
+
+// Collapsed by default: with several destinations and several replays, an open
+// history buries every destination after the first.
+func historySummary(delivery console.Delivery) string {
+	attempts := 0
+	for _, round := range delivery.Rounds {
+		attempts += len(round.Attempts)
+	}
+	if len(delivery.Rounds) == 1 {
+		return fmt.Sprintf("attempt history — %d attempts", attempts)
+	}
+	return fmt.Sprintf("attempt history — %d attempts over %d runs", attempts, len(delivery.Rounds))
+}
+
+templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider) {
+	<div id="routes">
+		<h1>Routes</h1>
+		if len(unrouted) > 0 {
+			<section class="attention">
+				<h1>Received, but going nowhere</h1>
+				<p class="muted">
+					These providers have sent events that are recorded and waiting. They have no
+					route, so nothing has been delivered. Give one a destination and every event
+					it already sent is picked up.
+				</p>
+				<table>
+					<thead>
+						<tr><th>provider</th><th>events</th><th>last received</th><th>destination url</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, provider := range unrouted {
+							<tr>
+								<td><strong>{ provider.Provider }</strong></td>
+								<td>{ fmt.Sprint(provider.Events) }</td>
+								<td>{ stamp(provider.LastReceived) }</td>
+								<td colspan="2">
+									<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+											hx-confirm={ fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider) }>
+										<input type="hidden" name="provider" value={ provider.Provider }/>
+										<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
+										<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
+										<button>create route</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
+		<section>
+			<h1>Configured</h1>
+			<p class="muted">
+				Adding a route, or switching a destination back on, delivers every event already
+				recorded for that provider. Changing where a route points does not: what went to
+				the old address stays delivered, and resend is how you send it again.
+			</p>
+			if len(routes) == 0 {
+				<p class="muted">No route. Nothing is delivered until a provider has one.</p>
+			} else {
+				<table>
+					<thead>
+						<tr><th>provider</th><th>destination</th><th>url</th><th>deliveries</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, route := range routes {
+							<tr>
+								<td>{ route.Provider }</td>
+								<td>{ route.Destination }</td>
+								<td colspan="3">
+									<form hx-post={ "/routes/" + route.ID.String() + "/save" }
+											hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
+										<input type="url" name="url" value={ route.URL } size="44" required/>
+										if route.Enabled {
+											<label><input type="checkbox" name="enabled" value="1" checked/> enabled</label>
+										} else {
+											<label><input type="checkbox" name="enabled" value="1"/> enabled</label>
+										}
+										<button>save</button>
+										<span class="muted">{ fmt.Sprintf("%d deliveries", route.Deliveries) }</span>
+										if route.Deliveries > 0 {
+											<button hx-post={ "/routes/" + route.ID.String() + "/resend" }
+													hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+													hx-confirm={ fmt.Sprintf("Resend all %d deliveries to this destination? Each one will be posted again.", route.Deliveries) }>resend</button>
+										}
+										<button hx-post={ "/routes/" + route.ID.String() + "/delete" }
+												hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+												hx-confirm="Remove this route? Deliveries already recorded are kept.">remove</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		<section>
+			<h1>Add a route</h1>
+			<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+					hx-confirm="Every event already recorded for this provider will be delivered to this destination. Continue?">
+				<input type="text" name="provider" placeholder="provider" required/>
+				<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
+				<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
+				<button>create route</button>
+			</form>
+		</section>
+	</div>
+}
+
+// Bodies are stored verbatim and shown verbatim. Indenting here is a reading
+// aid over a copy, and the original is one click away.
+const prettyLimit = 256 << 10
+
+func isJSON(body []byte) bool {
+	if len(body) == 0 || len(body) > prettyLimit {
+		return false
+	}
+	return json.Valid(body)
+}
+
+func prettyJSON(body []byte) string {
+	var out bytes.Buffer
+	if err := json.Indent(&out, body, "", "  "); err != nil {
+		return string(body)
+	}
+	return out.String()
+}
+
+func stamp(at time.Time) string {
+	if at.IsZero() {
+		return "—"
+	}
+	return at.Local().Format("2006-01-02 15:04:05")
+}
+
+func localTime(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.Local().Format("2006-01-02T15:04")
+}
