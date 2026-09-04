@@ -18,6 +18,8 @@ Usage:
 
 Commands:
   serve     Accept inbound webhooks and record them
+  dispatch  Deliver recorded events to their destinations
+  route     Manage where a provider's events are delivered
   migrate   Apply pending schema migrations and exit
   version   Print the build version and exit
   help      Print this message
@@ -44,6 +46,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch cmd {
 	case "serve":
 		return serve(ctx, rest, stdout, stderr)
+	case "dispatch":
+		return dispatch(ctx, rest, stdout, stderr)
+	case "route":
+		return route(ctx, rest, stdout, stderr)
 	case "migrate":
 		return migrate(ctx, rest, stdout, stderr)
 	case "version":

@@ -8,7 +8,30 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type Delivery struct {
+	ID            uuid.UUID
+	EventID       uuid.UUID
+	DestinationID uuid.UUID
+	State         string
+	Attempts      int32
+	NextAttemptAt time.Time
+	LeasedUntil   pgtype.Timestamptz
+	LastStatus    pgtype.Int4
+	LastError     pgtype.Text
+	DeliveredAt   pgtype.Timestamptz
+	CreatedAt     time.Time
+}
+
+type Destination struct {
+	ID        uuid.UUID
+	Name      string
+	Url       string
+	Enabled   bool
+	CreatedAt time.Time
+}
 
 type InboundEvent struct {
 	ID         uuid.UUID
@@ -16,10 +39,18 @@ type InboundEvent struct {
 	Path       string
 	ReceivedAt time.Time
 	BodySize   int32
+	PlannedAt  pgtype.Timestamptz
 }
 
 type InboundRequest struct {
 	EventID uuid.UUID
 	Headers []byte
 	Body    []byte
+}
+
+type Route struct {
+	ID            uuid.UUID
+	Provider      string
+	DestinationID uuid.UUID
+	CreatedAt     time.Time
 }

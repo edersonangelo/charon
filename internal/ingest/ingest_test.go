@@ -93,7 +93,7 @@ func TestReceiveStoresTheBodyVerbatim(t *testing.T) {
 	body := []byte("{\n  \"z\": 1,\n  \"a\": [2,3]  }\t\n")
 
 	fake := &fakeRecorder{}
-	rec := post(t, serve(t, fake, ingest.Config{}), "/webhooks/asaas", body)
+	rec := post(t, serve(t, fake, ingest.Config{}), "/webhooks/github", body)
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
@@ -106,11 +106,11 @@ func TestReceiveStoresTheBodyVerbatim(t *testing.T) {
 	if !bytes.Equal(recorded[0].Body, body) {
 		t.Errorf("stored body = %q, want %q", recorded[0].Body, body)
 	}
-	if recorded[0].Provider != "asaas" {
-		t.Errorf("provider = %q, want %q", recorded[0].Provider, "asaas")
+	if recorded[0].Provider != "github" {
+		t.Errorf("provider = %q, want %q", recorded[0].Provider, "github")
 	}
-	if recorded[0].Path != "/webhooks/asaas" {
-		t.Errorf("request path = %q, want %q", recorded[0].Path, "/webhooks/asaas")
+	if recorded[0].Path != "/webhooks/github" {
+		t.Errorf("request path = %q, want %q", recorded[0].Path, "/webhooks/github")
 	}
 }
 

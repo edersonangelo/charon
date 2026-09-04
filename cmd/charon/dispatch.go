@@ -1,0 +1,161 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/edersonangelo/charon/internal/delivery"
+	"github.com/edersonangelo/charon/internal/postgres"
+)
+
+func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("charon dispatch", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	databaseURL := fs.String("database-url", envOr("CHARON_DATABASE_URL", ""),
+		"PostgreSQL connection string (env CHARON_DATABASE_URL)")
+	logLevel := fs.String("log-level", envOr("CHARON_LOG_LEVEL", "info"),
+		"debug, info, warn or error (env CHARON_LOG_LEVEL)")
+	workers := fs.Int("workers", 8, "how many deliveries to attempt at once")
+	batchSize := fs.Int("batch-size", 50, "how many deliveries to claim per round")
+	safetyInterval := fs.Duration("safety-interval", 30*time.Second,
+		"longest the dispatcher sleeps before scanning anyway")
+	requestTimeout := fs.Duration("request-timeout", 15*time.Second, "how long a destination has to answer")
+	maxAttempts := fs.Int("max-attempts", 12, "attempts before a delivery is dead lettered")
+	backoffBase := fs.Duration("backoff-base", 5*time.Second, "first retry window")
+	backoffCap := fs.Duration("backoff-cap", time.Hour, "largest retry window")
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+	if *databaseURL == "" {
+		return errMissingDatabaseURL
+	}
+
+	logger := newLogger(stdout, *logLevel)
+
+	store, err := postgres.Open(ctx, *databaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	dispatcher := delivery.New(store, delivery.Config{
+		Workers:        *workers,
+		BatchSize:      *batchSize,
+		SafetyInterval: *safetyInterval,
+		RequestTimeout: *requestTimeout,
+		MaxAttempts:    *maxAttempts,
+		BackoffBase:    *backoffBase,
+		BackoffCap:     *backoffCap,
+		Logger:         logger,
+	})
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	return dispatcher.Run(ctx)
+}
+
+var errRouteUsage = errors.New("usage: charon route add -provider <name> -url <url> [-destination <name>] | charon route list")
+
+func route(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errRouteUsage
+	}
+
+	switch args[0] {
+	case "add":
+		return routeAdd(ctx, args[1:], stdout, stderr)
+	case "list":
+		return routeList(ctx, args[1:], stdout, stderr)
+	default:
+		return errRouteUsage
+	}
+}
+
+func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("charon route add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	databaseURL := fs.String("database-url", envOr("CHARON_DATABASE_URL", ""),
+		"PostgreSQL connection string (env CHARON_DATABASE_URL)")
+	provider := fs.String("provider", "", "the provider whose events are routed")
+	url := fs.String("url", "", "where the events are delivered")
+	destination := fs.String("destination", "", "name for the destination, defaults to the provider")
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+	if *databaseURL == "" {
+		return errMissingDatabaseURL
+	}
+	if *provider == "" || *url == "" {
+		return errRouteUsage
+	}
+	if *destination == "" {
+		*destination = *provider
+	}
+
+	store, err := postgres.Open(ctx, *databaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	if err := store.AddRoute(ctx, *provider, *destination, *url); err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(stdout, "routed %s to %s (%s)\n", *provider, *destination, *url)
+	return err
+}
+
+func routeList(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("charon route list", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	databaseURL := fs.String("database-url", envOr("CHARON_DATABASE_URL", ""),
+		"PostgreSQL connection string (env CHARON_DATABASE_URL)")
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+	if *databaseURL == "" {
+		return errMissingDatabaseURL
+	}
+
+	store, err := postgres.Open(ctx, *databaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	routes, err := store.Routes(ctx)
+	if err != nil {
+		return err
+	}
+	if len(routes) == 0 {
+		_, err = fmt.Fprintln(stdout, "no routes")
+		return err
+	}
+
+	for _, r := range routes {
+		state := "enabled"
+		if !r.Enabled {
+			state = "disabled"
+		}
+		if _, err := fmt.Fprintf(stdout, "%-20s %-20s %-8s %s\n",
+			r.Provider, r.Destination, state, r.URL); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -11,12 +11,29 @@ import (
 )
 
 type Querier interface {
+	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
+	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
+	CountDeliveriesByState(ctx context.Context) ([]CountDeliveriesByStateRow, error)
+	CountEventsAwaitingRoute(ctx context.Context) (int64, error)
 	CountInboundEvents(ctx context.Context) (int64, error)
+	CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error
+	CreateDestination(ctx context.Context, arg CreateDestinationParams) (Destination, error)
 	CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) error
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
+	CreateRoute(ctx context.Context, arg CreateRouteParams) error
+	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
+	DestinationByName(ctx context.Context, name string) (Destination, error)
+	EnabledDestinationsForProvider(ctx context.Context, provider string) ([]uuid.UUID, error)
 	GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, eventID uuid.UUID) (InboundRequest, error)
 	ListRecentInboundEvents(ctx context.Context, limit int32) ([]InboundEvent, error)
+	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
+	MarkDelivered(ctx context.Context, arg MarkDeliveredParams) error
+	MarkEventPlanned(ctx context.Context, id uuid.UUID) error
+	MarkFailed(ctx context.Context, arg MarkFailedParams) error
+	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
+	NotifyWork(ctx context.Context) error
+	OldestPendingAge(ctx context.Context) (float64, error)
 }
 
 var _ Querier = (*Queries)(nil)

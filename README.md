@@ -8,9 +8,11 @@ Single binary, one PostgreSQL database, no other runtime dependencies.
 
 ## Status
 
-Pre-alpha. Ingestion works: Charon accepts a webhook, records it durably, and
-acknowledges it only after that record is committed. Nothing is delivered
-anywhere yet — that is the next phase. See [Roadmap](#roadmap).
+Pre-alpha. Ingestion and delivery work: Charon accepts a webhook, records it
+durably, acknowledges it only after that record is committed, then delivers it
+to the destinations routed for its provider, retrying with backoff until the
+destination answers `2xx` or the attempt limit is reached. There is no operator
+panel and no signature verification yet. See [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -77,10 +79,74 @@ Binary releases, a published container image and `go install` support arrive at
 ## Commands
 
 ```
-charon serve     Accept inbound webhooks and record them
-charon migrate   Apply pending schema migrations and exit
-charon version   Print the build version
+charon serve      Accept inbound webhooks and record them
+charon dispatch   Deliver recorded events to their destinations
+charon route      Manage where a provider's events are delivered
+charon migrate    Apply pending schema migrations and exit
+charon version    Print the build version
 ```
+
+## Routing
+
+Nothing is delivered until a provider has a route. Adding one takes no deploy
+and no restart:
+
+```sh
+docker compose run --rm charon route add -provider stripe -url https://api.internal/webhooks/stripe
+docker compose run --rm charon route list
+```
+
+An event recorded for a provider with no enabled route waits. It is not
+discarded and it is not marked as handled: the moment a route appears, the next
+dispatch round delivers it. Configuring the route after the first event arrives
+costs nothing.
+
+## Delivery
+
+`charon dispatch` claims due deliveries under a lease, posts the raw body to the
+destination, and closes the delivery only when the destination answers `2xx`.
+Anything else counts an attempt and schedules a retry with exponential backoff
+and jitter. At the attempt limit the delivery becomes `dead`, which is never
+counted as delivered.
+
+Each request carries `X-Charon-Delivery-Id`, `X-Charon-Event-Id`,
+`X-Charon-Provider` and `X-Charon-Attempt`, plus the original `Content-Type`.
+
+It does not poll on a fixed interval. An inbound record announces itself on
+commit, so a new event is picked up immediately, and between rounds the
+dispatcher sleeps until the earliest retry is actually due. The safety interval
+bounds that sleep, because a delivery can become due through a route that
+announced nothing — a replay, a manual change, an expired lease.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-workers` | `8` | Deliveries attempted at once |
+| `-batch-size` | `50` | Deliveries claimed per round |
+| `-safety-interval` | `30s` | Longest sleep before scanning anyway |
+| `-request-timeout` | `15s` | How long a destination has to answer |
+| `-max-attempts` | `12` | Attempts before dead lettering |
+| `-backoff-base` | `5s` | First retry window |
+| `-backoff-cap` | `1h` | Largest retry window |
+
+## Delivery is at-least-once
+
+Charon guarantees a recorded event reaches its destination. It does not
+guarantee it reaches it exactly once, and it cannot.
+
+A destination can accept a delivery and have the acknowledgement lost on the way
+back: a dropped connection, a timeout on Charon's side, a restart between the
+`2xx` and the write that records it. None of those look any different from a
+destination that received nothing, so Charon retries, and the handler sees the
+same event again.
+
+Duplicates also arrive without Charon's help. Providers retry on their own, and
+two providers can report the same fact through independent paths.
+
+**Consumers have to be idempotent.** The question to answer is not "have I seen
+these bytes before" but "have I already applied this effect", against your own
+state and keyed by the provider's event identifier. Recording a status can be
+repeated safely; charging a card cannot, and only the consumer knows which one it
+is doing.
 
 ## Configuration
 
@@ -102,7 +168,7 @@ sending traffic to.
 |---|---|---|
 | 0 | Build, lint and test gate | done |
 | 1 | Durable ingestion | done |
-| 2 | Delivery loop: claim, retry, backoff, dead letter | |
+| 2 | Delivery loop: claim, retry, backoff, dead letter | done |
 | 3 | Operator panel: search, inspect, replay | |
 | 4 | Per-provider signature verification and correlation | |
 | 5 | OIDC login, authenticated delivery, metrics | |

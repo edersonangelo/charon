@@ -247,13 +247,13 @@
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/webhooks/salvy",
+              "raw": "{{baseUrl}}/webhooks/shopify",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "webhooks",
-                "salvy"
+                "shopify"
               ]
             },
             "description": "An empty body is a fact about what arrived, not an error.",

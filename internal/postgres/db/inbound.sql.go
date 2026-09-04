@@ -70,7 +70,7 @@ func (q *Queries) CreateInboundRequest(ctx context.Context, arg CreateInboundReq
 }
 
 const getInboundEvent = `-- name: GetInboundEvent :one
-select id, provider, path, received_at, body_size from inbound_event where id = $1
+select id, provider, path, received_at, body_size, planned_at from inbound_event where id = $1
 `
 
 func (q *Queries) GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEvent, error) {
@@ -82,6 +82,7 @@ func (q *Queries) GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEve
 		&i.Path,
 		&i.ReceivedAt,
 		&i.BodySize,
+		&i.PlannedAt,
 	)
 	return i, err
 }
@@ -98,7 +99,7 @@ func (q *Queries) GetInboundRequest(ctx context.Context, eventID uuid.UUID) (Inb
 }
 
 const listRecentInboundEvents = `-- name: ListRecentInboundEvents :many
-select id, provider, path, received_at, body_size from inbound_event order by received_at desc limit $1
+select id, provider, path, received_at, body_size, planned_at from inbound_event order by received_at desc limit $1
 `
 
 func (q *Queries) ListRecentInboundEvents(ctx context.Context, limit int32) ([]InboundEvent, error) {
@@ -116,6 +117,7 @@ func (q *Queries) ListRecentInboundEvents(ctx context.Context, limit int32) ([]I
 			&i.Path,
 			&i.ReceivedAt,
 			&i.BodySize,
+			&i.PlannedAt,
 		); err != nil {
 			return nil, err
 		}

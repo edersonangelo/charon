@@ -18,6 +18,7 @@ import (
 var ErrBodyTooLarge = errors.New("body too large to record")
 
 type Store struct {
+	dsn  string
 	pool *pgxpool.Pool
 	q    *db.Queries
 }
@@ -38,7 +39,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("reaching the database: %w", err)
 	}
 
-	return &Store{pool: pool, q: db.New(pool)}, nil
+	return &Store{dsn: dsn, pool: pool, q: db.New(pool)}, nil
 }
 
 func (s *Store) Close() { s.pool.Close() }
@@ -86,6 +87,10 @@ func (s *Store) Record(ctx context.Context, req inbound.Request) error {
 		Body:    req.Body,
 	}); err != nil {
 		return fmt.Errorf("recording the raw request: %w", err)
+	}
+
+	if err := q.NotifyWork(ctx); err != nil {
+		return fmt.Errorf("announcing the inbound record: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

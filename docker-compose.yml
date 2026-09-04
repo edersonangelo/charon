@@ -15,6 +15,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  dispatcher:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    command: ["dispatch"]
+    environment:
+      CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
+      CHARON_LOG_LEVEL: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:18-alpine
     environment:
