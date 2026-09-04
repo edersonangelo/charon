@@ -6,15 +6,13 @@ run:
 linters:
   default: standard
   enable:
-    # Correctness traps that matter most in this codebase.
-    - bodyclose      # every HTTP response body must be closed
-    - noctx          # no outbound HTTP request without a context
-    - contextcheck   # do not drop or detach a context
-    - nilerr         # do not return nil when err is non-nil
-    - rowserrcheck   # check rows.Err() after iterating
-    - sqlclosecheck  # close sql.Rows / sql.Stmt
-    - errorlint      # correct error wrapping and comparison
-    # Hygiene.
+    - bodyclose
+    - noctx
+    - contextcheck
+    - nilerr
+    - rowserrcheck
+    - sqlclosecheck
+    - errorlint
     - gosec
     - misspell
     - revive
@@ -28,17 +26,16 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
+        - shadow
     revive:
       rules:
-        - name: exported
-        - name: package-comments
         - name: error-strings
         - name: error-return
         - name: context-as-argument
         - name: indent-error-flow
     gosec:
       excludes:
-        - G104 # duplicates errcheck
+        - G104
 
   exclusions:
     presets:

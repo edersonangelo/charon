@@ -31,7 +31,6 @@ jobs:
           path: bin
           key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
 
-      # Same target a contributor runs locally. CI must never diverge from it.
       - run: make ci
 
   pr-title:

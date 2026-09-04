@@ -5,18 +5,28 @@ VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || 
 LDFLAGS          := -s -w -X main.version=$(VERSION)
 GOLANGCI_VERSION ?= latest
 GOLANGCI         := $(BIN)/golangci-lint
+SQLC             := $(BIN)/sqlc
+SQLC_VERSION     ?= latest
 
 .DEFAULT_GOAL := help
-.PHONY: help tools generate fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean
+.PHONY: help tools generate generate-check fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean
 
 help: ## Show available targets
 	grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "};{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-tools: ## Install pinned dev tools into ./bin
+tools: ## Install dev tools into ./bin
 	GOBIN=$(BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	GOBIN=$(BIN) $(GO) install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
-generate: ## Regenerate code from SQL and templates (no generators wired yet)
-	@echo "generate: nothing to do until phase 1 introduces sqlc"
+generate: $(SQLC) ## Regenerate the database layer from migrations and queries
+	$(SQLC) generate
+
+generate-check: generate ## Fail if the committed generated code is stale
+	@git diff --exit-code -- internal/store/db \
+		|| { echo "generated code is stale: run 'make generate' and commit the result"; exit 1; }
+
+$(SQLC):
+	$(MAKE) tools
 
 fmt: ## Format all code
 	gofmt -w .
@@ -46,7 +56,7 @@ test-race: ## Run tests with the race detector
 build: ## Build the charon binary into ./bin
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/$(BINARY) ./cmd/charon
 
-ci: fmt-check vet lint test-race build ## Everything CI runs, in the same order
+ci: fmt-check vet lint generate-check test-race build ## Everything CI runs, in the same order
 	echo "ci: ok ($(VERSION))"
 
 hooks: ## Install the local git hooks

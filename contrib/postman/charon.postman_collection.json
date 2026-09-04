@@ -1,0 +1,307 @@
+{
+  "info": {
+    "name": "Charon",
+    "description": "Charon inbound webhook gateway.\n\nStart the stack with `docker compose up -d`, then run this collection. Every request asserts its own status code, so a green run is a working gateway.\n\nThe requests that expect 202 include the ones a gateway is tempted to reject: a malformed body, an unknown provider and an empty body. Charon does not read the payload, so none of them can fail.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "lastEventId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "Reports that the process is up. Ignores the database."
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            },
+            "description": "Reports whether the database is reachable. Returns 503 when it is not: stop the postgres service and run this again."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Ingestion",
+      "item": [
+        {
+          "name": "Receive a webhook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 202\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "pm.test(\"returns an event id\", function () {",
+                  "    pm.expect(pm.response.json().id).to.be.a(\"string\");",
+                  "    pm.collectionVariables.set(\"lastEventId\", pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Stripe-Signature",
+                "value": "t=1,v1=deadbeef"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/stripe",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "stripe"
+              ]
+            },
+            "description": "202 means the request is committed to the database, not that anything was done with it. The signature header is stored verbatim for later verification.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_1\",\n  \"type\": \"charge.succeeded\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Malformed body is accepted",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 202\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "pm.test(\"returns an event id\", function () {",
+                  "    pm.expect(pm.response.json().id).to.be.a(\"string\");",
+                  "    pm.collectionVariables.set(\"lastEventId\", pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/stripe",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "stripe"
+              ]
+            },
+            "description": "Nothing parses the payload, so a broken body cannot be rejected.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"id\":\"evt_2\","
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown provider is accepted",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 202\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "pm.test(\"returns an event id\", function () {",
+                  "    pm.expect(pm.response.json().id).to.be.a(\"string\");",
+                  "    pm.collectionVariables.set(\"lastEventId\", pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/never-heard-of-it",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "never-heard-of-it"
+              ]
+            },
+            "description": "Adding a provider must never require a deploy, so an unrecognised one is recorded rather than refused.",
+            "body": {
+              "mode": "raw",
+              "raw": "this is not json at all"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Empty body is accepted",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 202\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "pm.test(\"returns an event id\", function () {",
+                  "    pm.expect(pm.response.json().id).to.be.a(\"string\");",
+                  "    pm.collectionVariables.set(\"lastEventId\", pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/salvy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "salvy"
+              ]
+            },
+            "description": "An empty body is a fact about what arrived, not an error.",
+            "body": {
+              "mode": "raw",
+              "raw": ""
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Refusals",
+      "item": [
+        {
+          "name": "GET is not allowed",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 405\", function () {",
+                  "    pm.response.to.have.status(405);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/stripe",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "stripe"
+              ]
+            },
+            "description": "Only POST is served, so a provider misconfigured to GET is not silently treated as a delivery."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

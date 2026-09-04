@@ -1,4 +1,20 @@
 services:
+  charon:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    environment:
+      CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
+      CHARON_ADDR: ":8080"
+      CHARON_LOG_LEVEL: debug
+    ports:
+      - "${CHARON_HOST_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:18-alpine
     environment:
@@ -6,9 +22,9 @@ services:
       POSTGRES_PASSWORD: charon
       POSTGRES_DB: charon
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U charon -d charon"]
       interval: 2s

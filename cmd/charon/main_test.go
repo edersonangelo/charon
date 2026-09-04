@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -36,6 +37,16 @@ func TestRun(t *testing.T) {
 			args:    []string{"nope"},
 			wantErr: errUnknownCommand,
 		},
+		{
+			name:    "serve without a database url is an error",
+			args:    []string{"serve"},
+			wantErr: errMissingDatabaseURL,
+		},
+		{
+			name:    "migrate without a database url is an error",
+			args:    []string{"migrate"},
+			wantErr: errMissingDatabaseURL,
+		},
 	}
 
 	for _, tt := range tests {
@@ -43,7 +54,7 @@ func TestRun(t *testing.T) {
 			t.Parallel()
 
 			var stdout, stderr bytes.Buffer
-			err := run(tt.args, &stdout, &stderr)
+			err := run(context.Background(), tt.args, &stdout, &stderr)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {

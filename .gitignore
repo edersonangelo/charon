@@ -1,23 +1,16 @@
-# Build output
 /bin/
 /dist/
 *.exe
 *.test
 
-# Coverage and profiling
 *.out
 coverage.*
 *.prof
 
-# Local environment
 .env
 .env.local
 
-# Editors and OS
 .DS_Store
 .idea/
 .vscode/
 *.swp
-
-# Note: generated code (sqlc, templ) IS committed on purpose.
-# See CONTRIBUTING.md -> Generated code.
