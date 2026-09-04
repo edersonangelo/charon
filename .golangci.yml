@@ -1,0 +1,59 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    # Correctness traps that matter most in this codebase.
+    - bodyclose      # every HTTP response body must be closed
+    - noctx          # no outbound HTTP request without a context
+    - contextcheck   # do not drop or detach a context
+    - nilerr         # do not return nil when err is non-nil
+    - rowserrcheck   # check rows.Err() after iterating
+    - sqlclosecheck  # close sql.Rows / sql.Stmt
+    - errorlint      # correct error wrapping and comparison
+    # Hygiene.
+    - gosec
+    - misspell
+    - revive
+    - unconvert
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: error-strings
+        - name: error-return
+        - name: context-as-argument
+        - name: indent-error-flow
+    gosec:
+      excludes:
+        - G104 # duplicates errcheck
+
+  exclusions:
+    presets:
+      - common-false-positives
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/edersonangelo/charon
