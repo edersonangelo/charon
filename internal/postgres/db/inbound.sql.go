@@ -23,58 +23,74 @@ func (q *Queries) CountInboundEvents(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const createInboundEvent = `-- name: CreateInboundEvent :exec
+const createInboundEvent = `-- name: CreateInboundEvent :one
 insert into inbound_event (
-    id, provider, path, received_at, body_size
+    tenant_id, provider, path, received_at, body_size, signature
 ) values (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $5, $6
 )
+returning id
 `
 
 type CreateInboundEventParams struct {
-	ID         uuid.UUID
+	TenantID   uuid.UUID
 	Provider   string
 	Path       string
 	ReceivedAt time.Time
 	BodySize   int32
+	Signature  string
 }
 
-func (q *Queries) CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) error {
-	_, err := q.db.Exec(ctx, createInboundEvent,
-		arg.ID,
+func (q *Queries) CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createInboundEvent,
+		arg.TenantID,
 		arg.Provider,
 		arg.Path,
 		arg.ReceivedAt,
 		arg.BodySize,
+		arg.Signature,
 	)
-	return err
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const createInboundRequest = `-- name: CreateInboundRequest :exec
 insert into inbound_request (
-    event_id, headers, body
+    event_id, tenant_id, headers, body
 ) values (
-    $1, $2, $3
+    $1, $2, $3, $4
 )
 `
 
 type CreateInboundRequestParams struct {
-	EventID uuid.UUID
-	Headers []byte
-	Body    []byte
+	EventID  uuid.UUID
+	TenantID uuid.UUID
+	Headers  []byte
+	Body     []byte
 }
 
 func (q *Queries) CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error {
-	_, err := q.db.Exec(ctx, createInboundRequest, arg.EventID, arg.Headers, arg.Body)
+	_, err := q.db.Exec(ctx, createInboundRequest,
+		arg.EventID,
+		arg.TenantID,
+		arg.Headers,
+		arg.Body,
+	)
 	return err
 }
 
 const getInboundEvent = `-- name: GetInboundEvent :one
-select id, provider, path, received_at, body_size, planned_at from inbound_event where id = $1
+select id, provider, path, received_at, body_size, planned_at, signature, tenant_id from inbound_event where id = $1 and tenant_id = $2
 `
 
-func (q *Queries) GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEvent, error) {
-	row := q.db.QueryRow(ctx, getInboundEvent, id)
+type GetInboundEventParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error) {
+	row := q.db.QueryRow(ctx, getInboundEvent, arg.ID, arg.TenantID)
 	var i InboundEvent
 	err := row.Scan(
 		&i.ID,
@@ -83,23 +99,35 @@ func (q *Queries) GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEve
 		&i.ReceivedAt,
 		&i.BodySize,
 		&i.PlannedAt,
+		&i.Signature,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getInboundRequest = `-- name: GetInboundRequest :one
-select event_id, headers, body from inbound_request where event_id = $1
+select event_id, headers, body, tenant_id from inbound_request where event_id = $1 and tenant_id = $2
 `
 
-func (q *Queries) GetInboundRequest(ctx context.Context, eventID uuid.UUID) (InboundRequest, error) {
-	row := q.db.QueryRow(ctx, getInboundRequest, eventID)
+type GetInboundRequestParams struct {
+	EventID  uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error) {
+	row := q.db.QueryRow(ctx, getInboundRequest, arg.EventID, arg.TenantID)
 	var i InboundRequest
-	err := row.Scan(&i.EventID, &i.Headers, &i.Body)
+	err := row.Scan(
+		&i.EventID,
+		&i.Headers,
+		&i.Body,
+		&i.TenantID,
+	)
 	return i, err
 }
 
 const listRecentInboundEvents = `-- name: ListRecentInboundEvents :many
-select id, provider, path, received_at, body_size, planned_at from inbound_event order by received_at desc limit $1
+select id, provider, path, received_at, body_size, planned_at, signature, tenant_id from inbound_event order by received_at desc limit $1
 `
 
 func (q *Queries) ListRecentInboundEvents(ctx context.Context, limit int32) ([]InboundEvent, error) {
@@ -118,6 +146,8 @@ func (q *Queries) ListRecentInboundEvents(ctx context.Context, limit int32) ([]I
 			&i.ReceivedAt,
 			&i.BodySize,
 			&i.PlannedAt,
+			&i.Signature,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}

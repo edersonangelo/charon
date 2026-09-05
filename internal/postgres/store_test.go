@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/edersonangelo/charon/internal/inbound"
@@ -34,7 +33,6 @@ func open(t *testing.T) (*postgres.Store, string) {
 
 func request(body []byte) inbound.Request {
 	return inbound.Request{
-		ID:         uuid.Must(uuid.NewV7()),
 		Provider:   "stripe",
 		Path:       "/webhooks/stripe",
 		ReceivedAt: time.Now().UTC().Truncate(time.Microsecond),
@@ -66,11 +64,12 @@ func TestRecordStoresTheRequestVerbatim(t *testing.T) {
 	body := []byte("{\n  \"z\": 1,\t\"a\": [2,3]  }\n\x00\xff")
 	req := request(body)
 
-	if err := store.Record(ctx, req); err != nil {
+	id, err := store.Record(ctx, req)
+	if err != nil {
 		t.Fatalf("recording: %v", err)
 	}
 
-	event, err := store.Event(ctx, req.ID)
+	event, err := store.Event(ctx, id)
 	if err != nil {
 		t.Fatalf("reading the event: %v", err)
 	}
@@ -80,7 +79,7 @@ func TestRecordStoresTheRequestVerbatim(t *testing.T) {
 	if int(event.BodySize) != len(body) {
 		t.Errorf("body size = %d, want %d", event.BodySize, len(body))
 	}
-	raw, err := store.RawRequest(ctx, req.ID)
+	raw, err := store.RawRequest(ctx, id)
 	if err != nil {
 		t.Fatalf("reading the raw request: %v", err)
 	}
@@ -108,7 +107,7 @@ func TestRecordIsAtomic(t *testing.T) {
 		t.Fatalf("dropping inbound_request: %v", err)
 	}
 
-	if err := store.Record(ctx, request([]byte(`{"a":1}`))); err == nil {
+	if _, err := store.Record(ctx, request([]byte(`{"a":1}`))); err == nil {
 		t.Fatal("Record() succeeded with no inbound_request table, want an error")
 	}
 
@@ -127,7 +126,7 @@ func TestRecordFailsWhenTheDatabaseIsGone(t *testing.T) {
 	store, _ := open(t)
 	store.Close()
 
-	if err := store.Record(context.Background(), request([]byte(`{}`))); err == nil {
+	if _, err := store.Record(context.Background(), request([]byte(`{}`))); err == nil {
 		t.Fatal("Record() succeeded against a closed pool, want an error")
 	}
 }

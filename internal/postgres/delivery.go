@@ -13,6 +13,7 @@ import (
 
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres/db"
+	"github.com/edersonangelo/charon/internal/provider"
 )
 
 var (
@@ -39,7 +40,19 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 
 	planned := 0
 	for _, event := range events {
-		destinations, destErr := q.EnabledDestinationsForProvider(ctx, event.Provider)
+		// A signature that was checked and failed is settled here: recorded,
+		// visible, and never delivered anywhere.
+		if event.Signature == string(provider.Invalid) || event.Signature == string(provider.Missing) {
+			if markErr := q.MarkEventPlanned(ctx, event.ID); markErr != nil {
+				return 0, fmt.Errorf("settling event %s: %w", event.ID, markErr)
+			}
+			continue
+		}
+
+		destinations, destErr := q.EnabledDestinationsForProvider(ctx,
+			db.EnabledDestinationsForProviderParams{
+				TenantID: event.TenantID, Provider: event.Provider,
+			})
 		if destErr != nil {
 			return 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)
 		}
@@ -52,12 +65,8 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 		}
 
 		for _, destinationID := range destinations {
-			id, idErr := uuid.NewV7()
-			if idErr != nil {
-				return 0, fmt.Errorf("generating a delivery id: %w", idErr)
-			}
 			if createErr := q.CreateDelivery(ctx, db.CreateDeliveryParams{
-				ID:            id,
+				TenantID:      event.TenantID,
 				EventID:       event.ID,
 				DestinationID: destinationID,
 			}); createErr != nil {
@@ -101,14 +110,15 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 		}
 
 		deliveries = append(deliveries, outbound.Delivery{
-			ID:       row.ID,
-			EventID:  row.EventID,
-			Attempts: row.Attempts,
-			Replays:  row.ReplayCount,
-			URL:      target.Url,
-			Provider: target.Provider,
-			Headers:  headers,
-			Body:     target.Body,
+			ID:        row.ID,
+			EventID:   row.EventID,
+			Attempts:  row.Attempts,
+			Replays:   row.ReplayCount,
+			Transport: target.Transport,
+			URL:       target.Url,
+			Provider:  target.Provider,
+			Headers:   headers,
+			Body:      target.Body,
 		})
 	}
 	return deliveries, nil
@@ -164,7 +174,13 @@ func (s *Store) MarkFailed(
 	return nil
 }
 
-func (s *Store) AddRoute(ctx context.Context, provider, destination, url string) error {
+func (s *Store) AddRoute(
+	ctx context.Context, provider, destination, url, transport string,
+) error {
+	if transport == "" {
+		transport = outbound.HTTP
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning the route transaction: %w", err)
@@ -173,16 +189,14 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 
 	q := s.q.WithTx(tx)
 
-	existing, err := q.DestinationByName(ctx, destination)
+	existing, err := q.DestinationByName(ctx, db.DestinationByNameParams{
+		TenantID: s.tenantOf(ctx), Name: destination,
+	})
 	switch {
 	case err == nil:
 	case errors.Is(err, pgx.ErrNoRows):
-		id, idErr := uuid.NewV7()
-		if idErr != nil {
-			return fmt.Errorf("generating a destination id: %w", idErr)
-		}
 		existing, err = q.CreateDestination(ctx, db.CreateDestinationParams{
-			ID: id, Name: destination, Url: url,
+			TenantID: s.tenantOf(ctx), Name: destination, Url: url, Transport: transport,
 		})
 		if err != nil {
 			return fmt.Errorf("creating destination %q: %w", destination, err)
@@ -192,7 +206,7 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 	}
 
 	taken, err := q.ProviderAlreadyRoutedTo(ctx, db.ProviderAlreadyRoutedToParams{
-		Provider: provider, Url: url,
+		TenantID: s.tenantOf(ctx), Provider: provider, Url: url,
 	})
 	if err != nil {
 		return fmt.Errorf("checking existing routes for %q: %w", provider, err)
@@ -201,12 +215,8 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 		return ErrAlreadyRouted
 	}
 
-	routeID, err := uuid.NewV7()
-	if err != nil {
-		return fmt.Errorf("generating a route id: %w", err)
-	}
 	if err := q.CreateRoute(ctx, db.CreateRouteParams{
-		ID: routeID, Provider: provider, DestinationID: existing.ID,
+		TenantID: s.tenantOf(ctx), Provider: provider, DestinationID: existing.ID,
 	}); err != nil {
 		return fmt.Errorf("creating the route: %w", err)
 	}
@@ -214,7 +224,7 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 	// Routes are evaluated once per event. Without unplanning, a route added
 	// after an event was planned would never reach it, and there would be no
 	// delivery row to resend either.
-	if _, err := q.UnplanProvider(ctx, provider); err != nil {
+	if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: provider, TenantID: s.tenantOf(ctx)}); err != nil {
 		return fmt.Errorf("reopening planning for %q: %w", provider, err)
 	}
 
@@ -234,7 +244,7 @@ func (s *Store) AddRoute(ctx context.Context, provider, destination, url string)
 }
 
 func (s *Store) Routes(ctx context.Context) ([]outbound.Route, error) {
-	rows, err := s.q.ListRoutes(ctx)
+	rows, err := s.q.ListRoutes(ctx, s.tenantOf(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("listing routes: %w", err)
 	}
@@ -243,6 +253,7 @@ func (s *Store) Routes(ctx context.Context) ([]outbound.Route, error) {
 		routes = append(routes, outbound.Route{
 			Provider:    row.Provider,
 			Destination: row.Name,
+			Transport:   row.Transport,
 			URL:         row.Url,
 			Enabled:     row.Enabled,
 		})
@@ -251,7 +262,7 @@ func (s *Store) Routes(ctx context.Context) ([]outbound.Route, error) {
 }
 
 func (s *Store) DeliveryStates(ctx context.Context) (map[string]int64, error) {
-	rows, err := s.q.CountDeliveriesByState(ctx)
+	rows, err := s.q.DeliveryStateTotals(ctx, s.tenantOf(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("counting deliveries: %w", err)
 	}
@@ -334,7 +345,7 @@ func (s *Store) listen(ctx context.Context, channel string, woken chan<- struct{
 // Events recorded for a provider that has no enabled route. They stay
 // unplanned on purpose and are delivered as soon as a route appears.
 func (s *Store) EventsAwaitingRoute(ctx context.Context) (int64, error) {
-	n, err := s.q.CountEventsAwaitingRoute(ctx)
+	n, err := s.q.CountEventsAwaitingRoute(ctx, s.tenantOf(ctx))
 	if err != nil {
 		return 0, fmt.Errorf("counting events awaiting a route: %w", err)
 	}

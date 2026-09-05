@@ -1,24 +1,27 @@
 -- name: CreateDestination :one
-insert into destination (id, name, url)
-values ($1, $2, $3)
+insert into destination (tenant_id, name, url, transport)
+values ($1, $2, $3, $4)
 returning *;
 
 -- name: DestinationByName :one
-select * from destination where name = $1;
+select * from destination where tenant_id = $1 and name = $2;
 
 -- name: CreateRoute :exec
-insert into route (id, provider, destination_id)
+insert into route (tenant_id, provider, destination_id)
 values ($1, $2, $3)
-on conflict (provider, destination_id) do nothing;
+on conflict (tenant_id, provider, destination_id) do nothing;
 
 -- name: ListRoutes :many
-select r.provider, d.name, d.url, d.enabled
+select r.provider, d.name, d.url, d.transport, d.enabled
 from route r
 join destination d on d.id = r.destination_id
+where r.tenant_id = $1
 order by r.provider, d.name;
 
+-- A signature that was checked and failed is never delivered. One that was
+-- never checked is: a provider with no verifier configured behaves as before.
 -- name: ClaimUnplannedEvents :many
-select id, provider from inbound_event
+select id, tenant_id, provider, signature from inbound_event
 where planned_at is null
 order by received_at
 limit $1
@@ -27,10 +30,10 @@ for update skip locked;
 -- name: EnabledDestinationsForProvider :many
 select d.id from route r
 join destination d on d.id = r.destination_id
-where r.provider = $1 and d.enabled;
+where r.tenant_id = $1 and r.provider = $2 and d.enabled;
 
 -- name: CreateDelivery :exec
-insert into delivery (id, event_id, destination_id, state, next_attempt_at)
+insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
 values ($1, $2, $3, 'pending', now())
 on conflict (event_id, destination_id) do nothing;
 
@@ -52,7 +55,7 @@ where id in (
 returning id, event_id, destination_id, attempts, replay_count;
 
 -- name: DeliveryTarget :one
-select d.url, e.provider, e.path, r.headers, r.body
+select d.url, d.transport, e.provider, e.path, r.headers, r.body
 from delivery dl
 join inbound_event e on e.id = dl.event_id
 join inbound_request r on r.event_id = dl.event_id
@@ -79,9 +82,6 @@ set attempts = attempts + 1,
     state = case when attempts + 1 >= sqlc.arg(max_attempts)::int then 'dead' else 'pending' end
 where id = $1;
 
--- name: CountDeliveriesByState :many
-select state, count(*) as total from delivery group by state order by state;
-
 -- name: OldestPendingAge :one
 select coalesce(extract(epoch from now() - min(created_at)), 0)::float as seconds
 from delivery where state = 'pending';
@@ -98,6 +98,7 @@ with next as (
                     join route r on r.provider = e.provider
                     join destination d on d.id = r.destination_id and d.enabled
                     where e.planned_at is null
+                      and e.signature in ('unchecked', 'valid')
                 ) then now() end)
     ) as at
 )
@@ -107,7 +108,8 @@ from next;
 
 -- name: CountEventsAwaitingRoute :one
 select count(*) from inbound_event e
-where e.planned_at is null
+where e.tenant_id = $1
+  and e.planned_at is null
   and not exists (
       select 1 from route r
       join destination d on d.id = r.destination_id and d.enabled
