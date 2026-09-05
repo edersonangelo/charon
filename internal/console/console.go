@@ -12,25 +12,79 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Tenant is the boundary everything recorded belongs to.
+type Tenant struct {
+	ID        uuid.UUID
+	Slug      string
+	Name      string
+	CreatedAt time.Time
+}
+
 type User struct {
 	ID           uuid.UUID
 	Email        string
 	PasswordHash string
 	Subject      string
+	// SystemAdmin is not a role: a role is held inside a tenant, and the whole
+	// point of this is not being confined to one.
+	SystemAdmin bool
+}
+
+// Membership is somebody belonging to a tenant, as a role. A person can hold
+// several, and sees one at a time.
+type Membership struct {
+	Tenant uuid.UUID
+	Slug   string
+	Name   string
+	Role   string
+	// Since is when they joined. The oldest is where they started, which is
+	// where they are put when they have not chosen.
+	Since time.Time
+}
+
+// Placement is a tenant and the role held in it. It is what a mapping says and
+// what joining a tenant records.
+type Placement struct {
+	Tenant uuid.UUID
+	Role   string
 }
 
 // A user provisioned through single sign-on has no password, and must not be
 // able to sign in with one.
 func (u User) CanSignInWithPassword() bool { return u.PasswordHash != "" }
 
+// Operator is someone who can sign in to the panel of one tenant.
+type Operator struct {
+	ID          uuid.UUID
+	Email       string
+	Role        string
+	Subject     string
+	CreatedAt   time.Time
+	SystemAdmin bool
+}
+
+// SignsInWithSingleSignOn reports whether the account is linked to an identity
+// provider, which is the difference between an operator created here and one
+// that arrived from outside.
+func (o Operator) SignsInWithSingleSignOn() bool { return o.Subject != "" }
+
+// Mapping is a claim an identity provider sends and where it lands.
+type Mapping struct {
+	Method string
+	Claim  string
+	Tenant string
+	Role   string
+}
+
 type Filter struct {
-	Provider string
-	State    string
-	Search   string
-	Since    time.Time
-	Until    time.Time
-	Page     int
-	PageSize int
+	Provider  string
+	State     string
+	Signature string
+	Search    string
+	Since     time.Time
+	Until     time.Time
+	Page      int
+	PageSize  int
 }
 
 func (f Filter) Offset() int {
@@ -53,6 +107,7 @@ type EventSummary struct {
 	Path       string
 	ReceivedAt time.Time
 	BodySize   int32
+	Signature  string
 	Planned    bool
 	Deliveries int64
 	Delivered  int64
@@ -72,6 +127,7 @@ type EventDetail struct {
 	Path       string
 	ReceivedAt time.Time
 	BodySize   int32
+	Signature  string
 	Planned    bool
 	Headers    map[string][]string
 	Body       []byte
@@ -123,6 +179,7 @@ type RouteRow struct {
 	Provider      string
 	DestinationID uuid.UUID
 	Destination   string
+	Transport     string
 	URL           string
 	Enabled       bool
 	Deliveries    int64
@@ -134,6 +191,20 @@ type UnroutedProvider struct {
 	Provider     string
 	Events       int64
 	LastReceived time.Time
+}
+
+// Verification is a provider's signature settings as the panel shows them.
+// The secret never appears here: only the name of the variable that holds it.
+type Verification struct {
+	Provider      string
+	Verifier      string
+	Scheme        string
+	Algorithm     string
+	Encoding      string
+	Header        string
+	SecretEnv     string
+	SecretPresent bool
+	Refused       int64
 }
 
 var ErrWrongPassword = errors.New("wrong email or password")
