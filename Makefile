@@ -7,11 +7,14 @@ GOLANGCI_VERSION ?= latest
 GOLANGCI         := $(BIN)/golangci-lint
 SQLC             := $(BIN)/sqlc
 SQLC_VERSION     ?= latest
+TEST_DB          := charon-test-postgres
+TEST_DB_PORT     ?= 5440
+TEST_DATABASE_URL := postgres://charon:charon@localhost:$(TEST_DB_PORT)/charon?sslmode=disable
 TEMPL            := $(BIN)/templ
 TEMPL_VERSION    ?= latest
 
 .DEFAULT_GOAL := help
-.PHONY: help tools generate generate-check fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean
+.PHONY: help tools generate generate-check test-db test-db-stop fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean
 
 help: ## Show available targets
 	grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "};{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -55,11 +58,23 @@ lint: $(GOLANGCI) ## Run golangci-lint
 $(GOLANGCI):
 	$(MAKE) tools
 
-test: ## Run tests
-	$(GO) test ./...
+test-db: ## Start the PostgreSQL every test package shares
+	@if [ -z "$$(docker ps -q -f name=^/$(TEST_DB)$$)" ]; then \
+		docker rm -f $(TEST_DB) >/dev/null 2>&1 || true; \
+		docker run -d --name $(TEST_DB) --shm-size=1g \
+			-e POSTGRES_USER=charon -e POSTGRES_PASSWORD=charon -e POSTGRES_DB=charon \
+			-p $(TEST_DB_PORT):5432 postgres:18-alpine >/dev/null; \
+		until docker exec $(TEST_DB) pg_isready -U charon -d charon >/dev/null 2>&1; do sleep 1; done; \
+	fi
 
-test-race: ## Run tests with the race detector
-	$(GO) test -race -count=1 ./...
+test-db-stop: ## Remove the PostgreSQL the tests share
+	@docker rm -f $(TEST_DB) >/dev/null 2>&1 || true
+
+test: test-db ## Run tests
+	CHARON_TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(GO) test ./...
+
+test-race: test-db ## Run tests with the race detector
+	CHARON_TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(GO) test -race -count=1 ./...
 
 build: ## Build the charon binary into ./bin
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/$(BINARY) ./cmd/charon

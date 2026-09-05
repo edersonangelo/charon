@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -21,9 +22,11 @@ var (
 	containerDSN string
 )
 
-// One container per test binary, kept for the life of the process and removed
-// by the testcontainers reaper afterwards. A container per test saturates
-// Docker and turns unrelated tests flaky.
+// Name of the variable that points every package at one PostgreSQL instance.
+const testDatabaseURL = "CHARON_TEST_DATABASE_URL"
+
+// One container per test binary when none is provided, kept for the life of the
+// process and removed by the testcontainers reaper afterwards.
 //
 // A failed start is retried rather than remembered: caching the error would
 // fail every remaining test in the package over one transient hiccup.
@@ -34,6 +37,14 @@ func sharedContainer(tb testing.TB) string {
 	defer containerMu.Unlock()
 
 	if containerDSN != "" {
+		return containerDSN
+	}
+
+	// One server for the whole run when the caller provides it. Four packages
+	// each starting a container saturates Docker and makes unrelated tests
+	// fail; `make test` points every package at the same instance.
+	if given := os.Getenv(testDatabaseURL); given != "" {
+		containerDSN = given
 		return containerDSN
 	}
 
