@@ -33,7 +33,7 @@ func (s *Store) Migrate(ctx context.Context) (applied []string, err error) {
 
 	if _, err := conn.Exec(ctx, `
 		create table if not exists schema_migration (
-			name       text        primary key,
+			name       varchar(120) primary key,
 			applied_at timestamptz not null default now()
 		)`); err != nil {
 		return nil, fmt.Errorf("creating schema_migration: %w", err)
