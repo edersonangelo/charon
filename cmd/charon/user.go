@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
@@ -41,7 +42,7 @@ func user(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	password := fs.String("password", envOr("CHARON_PASSWORD", ""),
 		"password; prompted for when absent (env CHARON_PASSWORD)")
 	slug := tenantFlag(fs)
-	role := fs.String("role", "owner", "the role this operator has in that tenant")
+	role := fs.String("role", authz.Least, "the role this operator has in that tenant")
 	superadmin := fs.Bool("superadmin", false,
 		"make a system administrator, which is not confined to a tenant")
 
@@ -117,7 +118,7 @@ func userSuperadmin(ctx context.Context, args []string, stdout, stderr io.Writer
 	email := fs.String("email", "", "the operator who becomes one")
 	revoke := fs.Bool("revoke", false, "take the standing away instead of granting it")
 	slug := tenantFlag(fs)
-	role := fs.String("role", "owner", "when revoking, the tenant role to return to")
+	role := fs.String("role", authz.Least, "when revoking, the tenant role to return to")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing flags: %w", err)

@@ -110,6 +110,16 @@ Two routes for one provider deliver the same event twice, once to each
 destination. The same url twice for one provider is refused, because that is a
 duplicate rather than a fan-out.
 
+A provider name is never declared before it is used, so nothing can refuse one
+that is misspelled — routing a provider before its first event is the normal
+way to set one up. What `route add` does instead is say so, and name the
+providers this tenant already knows, so a near miss is visible at once:
+
+```
+routed stipe to stipe (https://api.internal/webhooks/stripe)
+warning: nothing has arrived for "stipe" and it has no verification configured; this tenant already knows github, stripe
+```
+
 ## verify
 
 How a provider's signature is checked. A provider with nothing configured is
@@ -181,7 +191,7 @@ charon user superadmin -email them@example.com -revoke -tenant acme -role admin
 | `-email` | — | the address that signs in |
 | `-password` | prompted for | `CHARON_PASSWORD` when scripting |
 | `-tenant` | `default` | which tenant they belong to |
-| `-role` | `owner` | the role they hold there |
+| `-role` | `viewer` | the role they hold there |
 | `-superadmin` | off | make a system administrator instead |
 
 How strong a password is belongs to whoever chooses it: the only thing refused
@@ -191,6 +201,10 @@ A **system administrator** belongs to no tenant and reaches every one, and is
 the only account that creates and removes tenants. Only somebody who already is
 one can make another, which is why the first is made here. Revoking asks for a
 tenant and a role, because an account with neither reaches nothing.
+
+Neither the account created here nor the one revoked back to a tenant gets more
+than `viewer` unless `-role` says so. Standing is granted deliberately, never
+by leaving a flag out.
 
 ## role
 
