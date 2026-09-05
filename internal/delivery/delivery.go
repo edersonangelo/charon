@@ -1,14 +1,11 @@
 package delivery
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
-	"net/http"
-	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +27,7 @@ type Queue interface {
 }
 
 type Config struct {
+	Transports     *Transports
 	Workers        int
 	BatchSize      int
 	SafetyInterval time.Duration
@@ -43,8 +41,10 @@ type Config struct {
 type Dispatcher struct {
 	queue  Queue
 	cfg    Config
-	client *http.Client
 	logger *slog.Logger
+
+	mu     sync.RWMutex
+	byKind map[string]outbound.Transport
 }
 
 func New(queue Queue, cfg Config) *Dispatcher {
@@ -73,11 +73,15 @@ func New(queue Queue, cfg Config) *Dispatcher {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 
+	if cfg.Transports == nil {
+		cfg.Transports = DefaultTransports()
+	}
+
 	return &Dispatcher{
 		queue:  queue,
 		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.RequestTimeout},
 		logger: cfg.Logger,
+		byKind: map[string]outbound.Transport{},
 	}
 }
 
@@ -174,96 +178,82 @@ func (d *Dispatcher) Tick(ctx context.Context) (int, error) {
 	return planned + len(deliveries), nil
 }
 
-// A delivery is closed as delivered only when the destination answers 2xx.
+// A delivery is closed as delivered only when the transport reports that the
+// destination accepted it.
 func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 	attempts := int(item.Attempts) + 1
 
 	started := time.Now()
-	status, err := d.post(ctx, item)
+	result := d.transport(item).Send(ctx, item)
 	took := time.Since(started)
 
-	accepted := err == nil && status >= 200 && status < 300
-
-	reason := ""
-	switch {
-	case err != nil:
-		reason = err.Error()
-	case !accepted:
-		reason = fmt.Sprintf("destination answered %d", status)
+	detail := ""
+	if !result.Accepted {
+		detail = result.Detail
 	}
 
-	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, status, reason, took); recErr != nil {
+	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, result.Status, detail, took); recErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a delivery attempt",
 			"delivery_id", item.ID, "error", recErr)
 	}
 
-	if accepted {
-		if markErr := d.queue.MarkDelivered(ctx, item.ID, status); markErr != nil {
+	if result.Accepted {
+		if markErr := d.queue.MarkDelivered(ctx, item.ID, result.Status); markErr != nil {
 			d.logger.ErrorContext(ctx, "could not record a delivery",
 				"delivery_id", item.ID, "error", markErr)
 		}
 		d.logger.DebugContext(ctx, "delivered",
-			"delivery_id", item.ID, "event_id", item.EventID,
-			"status", status, "took_ms", took.Milliseconds())
+			"delivery_id", item.ID, "event_id", item.EventID, "transport", item.Transport,
+			"status", result.Status, "took_ms", took.Milliseconds())
 		return
+	}
+
+	// A transport that says another attempt cannot help is taken at its word:
+	// retrying a rejection that will never change only delays the dead letter.
+	limit := d.cfg.MaxAttempts
+	if !result.Retryable {
+		limit = attempts
 	}
 
 	next := time.Now().UTC().Add(backoff(attempts, d.cfg.BackoffBase, d.cfg.BackoffCap))
 
-	if markErr := d.queue.MarkFailed(ctx, item.ID, next, status, reason, d.cfg.MaxAttempts); markErr != nil {
+	if markErr := d.queue.MarkFailed(ctx, item.ID, next, result.Status, detail, limit); markErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a failed delivery",
 			"delivery_id", item.ID, "error", markErr)
 		return
 	}
 
 	level := slog.LevelWarn
-	if attempts >= d.cfg.MaxAttempts {
+	if attempts >= limit {
 		level = slog.LevelError
 	}
 	d.logger.Log(ctx, level, "delivery attempt failed",
 		"delivery_id", item.ID, "event_id", item.EventID, "provider", item.Provider,
-		"attempt", attempts, "of", d.cfg.MaxAttempts, "status", status, "reason", reason)
+		"transport", item.Transport, "attempt", attempts, "of", limit,
+		"status", result.Status, "reason", detail)
 }
 
-func (d *Dispatcher) post(ctx context.Context, item outbound.Delivery) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, d.cfg.RequestTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, item.URL, bytes.NewReader(item.Body))
-	if err != nil {
-		return 0, fmt.Errorf("building the request: %w", err)
+// The transport for one delivery, built once per kind and kept.
+func (d *Dispatcher) transport(item outbound.Delivery) outbound.Transport {
+	kind := item.Transport
+	if kind == "" {
+		kind = HTTP
 	}
 
-	if contentType := header(item.Headers, "Content-Type"); contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+	d.mu.RLock()
+	built, ready := d.byKind[kind]
+	d.mu.RUnlock()
+	if ready {
+		return built
 	}
-	req.Header.Set("X-Charon-Delivery-Id", item.ID.String())
-	req.Header.Set("X-Charon-Event-Id", item.EventID.String())
-	req.Header.Set("X-Charon-Provider", item.Provider)
-	// Attempt counts within the current run; a replay opens a new run and
-	// starts over. Without the replay count a redelivery would look like a
-	// first attempt to whoever receives it.
-	req.Header.Set("X-Charon-Attempt", strconv.Itoa(int(item.Attempts)+1))
-	req.Header.Set("X-Charon-Replay", strconv.Itoa(int(item.Replays)))
 
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("reaching the destination: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	built = d.cfg.Transports.Build(kind, Options{RequestTimeout: d.cfg.RequestTimeout})
 
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	d.mu.Lock()
+	d.byKind[kind] = built
+	d.mu.Unlock()
 
-	return resp.StatusCode, nil
-}
-
-func header(headers map[string][]string, name string) string {
-	for key, values := range headers {
-		if http.CanonicalHeaderKey(key) == name && len(values) > 0 {
-			return values[0]
-		}
-	}
-	return ""
+	return built
 }
 
 // Exponential with half jitter, so a destination coming back up is not hit by

@@ -15,6 +15,7 @@ import (
 	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/inbound"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 	"github.com/edersonangelo/charon/internal/testsupport"
 )
@@ -66,6 +67,13 @@ func (d *destination) received() ([]byte, string) {
 
 func setup(t *testing.T, cfg delivery.Config) (*postgres.Store, *delivery.Dispatcher, *destination, string, uuid.UUID) {
 	t.Helper()
+	return setupOn(t, cfg, outbound.HTTP)
+}
+
+func setupOn(
+	t *testing.T, cfg delivery.Config, transport string,
+) (*postgres.Store, *delivery.Dispatcher, *destination, string, uuid.UUID) {
+	t.Helper()
 
 	dsn := testsupport.PostgresDSN(t)
 	ctx := context.Background()
@@ -80,24 +88,31 @@ func setup(t *testing.T, cfg delivery.Config) (*postgres.Store, *delivery.Dispat
 		t.Fatalf("migrating: %v", err)
 	}
 
+	kinds := delivery.DefaultTransports().Kinds()
+	if cfg.Transports != nil {
+		kinds = cfg.Transports.Kinds()
+	}
+	if err := store.Register(ctx, postgres.Kinds{Transports: append(kinds, transport)}); err != nil {
+		t.Fatalf("registering the transports: %v", err)
+	}
+
 	target := &destination{}
 	target.status.Store(http.StatusOK)
 	server := httptest.NewServer(target.handler())
 	t.Cleanup(server.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "test", server.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "test", server.URL, transport); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
-	eventID := uuid.Must(uuid.NewV7())
-	if err := store.Record(ctx, inbound.Request{
-		ID:         eventID,
+	eventID, err := store.Record(ctx, inbound.Request{
 		Provider:   "stripe",
 		Path:       "/webhooks/stripe",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{"Content-Type": {"application/json"}},
 		Body:       body,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording the event: %v", err)
 	}
 
@@ -219,10 +234,7 @@ func TestNothingIsLostWhileTheDestinationIsDown(t *testing.T) {
 	}
 
 	target.status.Store(http.StatusOK)
-
-	if _, err := dispatcher.Tick(context.Background()); err != nil {
-		t.Fatalf("tick after recovery: %v", err)
-	}
+	tickUntilDelivered(t, dispatcher, store)
 
 	if got := states(t, store); got["delivered"] != 1 || got["pending"] != 0 {
 		t.Fatalf("states = %v, want it delivered once the destination came back", got)
@@ -270,8 +282,7 @@ func TestAnEventWaitsForItsRouteAndIsDeliveredWhenItArrives(t *testing.T) {
 		t.Fatalf("migrating: %v", err)
 	}
 
-	if err := store.Record(ctx, inbound.Request{
-		ID:         uuid.Must(uuid.NewV7()),
+	if _, err := store.Record(ctx, inbound.Request{
 		Provider:   "arrives-first",
 		Path:       "/webhooks/arrives-first",
 		ReceivedAt: time.Now().UTC(),
@@ -305,7 +316,7 @@ func TestAnEventWaitsForItsRouteAndIsDeliveredWhenItArrives(t *testing.T) {
 	server := httptest.NewServer(target.handler())
 	t.Cleanup(server.Close)
 
-	if err := store.AddRoute(ctx, "arrives-first", "late", server.URL); err != nil {
+	if err := store.AddRoute(ctx, "arrives-first", "late", server.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -348,8 +359,7 @@ func TestWakesOnAnInboundRecordInsteadOfWaitingOutTheInterval(t *testing.T) {
 
 	waitForDelivered(t, store, 1, 5*time.Second)
 
-	if err := store.Record(context.Background(), inbound.Request{
-		ID:         uuid.Must(uuid.NewV7()),
+	if _, err := store.Record(context.Background(), inbound.Request{
 		Provider:   "stripe",
 		Path:       "/webhooks/stripe",
 		ReceivedAt: time.Now().UTC(),
@@ -419,4 +429,22 @@ func TestARedeliveryIsNotAnnouncedAsAFirstAttempt(t *testing.T) {
 		t.Errorf("replay = %q, want 1 so the destination can tell this is a redelivery",
 			got.Get("X-Charon-Replay"))
 	}
+}
+
+// The next attempt is scheduled a moment ahead, so a single tick right after a
+// destination recovers may find nothing due yet.
+func tickUntilDelivered(t *testing.T, dispatcher *delivery.Dispatcher, store *postgres.Store) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := dispatcher.Tick(context.Background()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if states(t, store)["delivered"] > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("nothing was delivered within the deadline: %v", states(t, store))
 }
