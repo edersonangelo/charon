@@ -1,0 +1,51 @@
+-- name: SetProvider :exec
+insert into provider (
+    tenant_id, name, verifier, secret_env, signature_header, tolerance_seconds,
+    scheme, algorithm, encoding, timestamp_key, signature_key
+) values (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+)
+on conflict (tenant_id, name) do update
+set verifier = excluded.verifier,
+    secret_env = excluded.secret_env,
+    signature_header = excluded.signature_header,
+    tolerance_seconds = excluded.tolerance_seconds,
+    scheme = excluded.scheme,
+    algorithm = excluded.algorithm,
+    encoding = excluded.encoding,
+    timestamp_key = excluded.timestamp_key,
+    signature_key = excluded.signature_key;
+
+-- name: Providers :many
+select name, verifier, secret_env, signature_header, tolerance_seconds,
+       scheme, algorithm, encoding, timestamp_key, signature_key
+from provider where tenant_id = $1 order by name;
+
+-- name: DeleteProvider :exec
+delete from provider where tenant_id = $1 and name = $2;
+
+-- name: MarkSignature :exec
+update inbound_event set signature = $2 where id = $1;
+
+-- name: NotifyProviders :exec
+select pg_notify('charon_provider', '');
+
+-- name: UnverifiedEvents :many
+select e.id, e.provider, r.headers, r.body
+from inbound_event e
+join inbound_request r on r.event_id = e.id
+where e.tenant_id = $1 and e.provider = $2 and e.signature in ('invalid', 'missing')
+order by e.received_at
+limit $3;
+
+-- name: MarkSignatureAndReopen :exec
+update inbound_event set signature = $2, planned_at = null where id = $1;
+
+-- name: SignatureTotals :many
+select signature, count(*)::bigint as total from inbound_event group by signature;
+
+-- name: RefusedByProvider :many
+select provider, count(*)::bigint as refused
+from inbound_event
+where tenant_id = $1 and signature in ('invalid', 'missing')
+group by provider;

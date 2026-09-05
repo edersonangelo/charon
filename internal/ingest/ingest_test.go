@@ -11,24 +11,45 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/ingest"
 )
 
+var (
+	firstTenant  = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	secondTenant = uuid.MustParse("00000000-0000-0000-0000-000000000002")
+)
+
 type fakeRecorder struct {
-	mu   sync.Mutex
-	got  []inbound.Request
-	fail error
+	mu    sync.Mutex
+	got   []inbound.Request
+	given []uuid.UUID
+	fail  error
 }
 
-func (f *fakeRecorder) Record(_ context.Context, req inbound.Request) error {
+func (f *fakeRecorder) Record(_ context.Context, req inbound.Request) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail != nil {
-		return f.fail
+		return uuid.Nil, f.fail
 	}
+	id := uuid.Must(uuid.NewV7())
 	f.got = append(f.got, req)
-	return nil
+	f.given = append(f.given, id)
+	return id, nil
+}
+
+func (f *fakeRecorder) Tenant(_ context.Context, slug string) (uuid.UUID, bool, error) {
+	switch slug {
+	case ingest.DefaultTenant:
+		return firstTenant, true, nil
+	case "second":
+		return secondTenant, true, nil
+	default:
+		return uuid.Nil, false, nil
+	}
 }
 
 func (f *fakeRecorder) recorded() []inbound.Request {
@@ -37,7 +58,7 @@ func (f *fakeRecorder) recorded() []inbound.Request {
 	return f.got
 }
 
-func serve(t *testing.T, r ingest.Recorder, cfg ingest.Config) *http.ServeMux {
+func serve(t *testing.T, r ingest.Store, cfg ingest.Config) *http.ServeMux {
 	t.Helper()
 	mux := http.NewServeMux()
 	ingest.New(r, cfg).Register(mux)
@@ -164,8 +185,8 @@ func TestReceiveReturnsTheEventIdentifier(t *testing.T) {
 	if len(recorded) != 1 {
 		t.Fatalf("recorded %d requests, want 1", len(recorded))
 	}
-	if body.ID != recorded[0].ID.String() {
-		t.Errorf("response id = %q, want the stored id %q", body.ID, recorded[0].ID)
+	if body.ID != fake.given[0].String() {
+		t.Errorf("response id = %q, want the recorded id %q", body.ID, fake.given[0])
 	}
 }
 
@@ -181,5 +202,47 @@ func TestReceiveIsPostOnly(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func bytesReader(payload []byte) *bytes.Reader { return bytes.NewReader(payload) }
+
+func TestTheAddressDecidesTheTenant(t *testing.T) {
+	t.Parallel()
+
+	recorder := &fakeRecorder{}
+	mux := serve(t, recorder, ingest.Config{})
+
+	if code := post(t, mux, "/webhooks/stripe", []byte(`{}`)).Code; code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", code, http.StatusAccepted)
+	}
+	if code := post(t, mux, "/webhooks/second/stripe", []byte(`{}`)).Code; code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", code, http.StatusAccepted)
+	}
+
+	got := recorder.recorded()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d requests, want 2", len(got))
+	}
+	if got[0].Tenant != firstTenant {
+		t.Errorf("an address without a tenant recorded under %s, want %s", got[0].Tenant, firstTenant)
+	}
+	if got[1].Tenant != secondTenant {
+		t.Errorf("/webhooks/second recorded under %s, want %s", got[1].Tenant, secondTenant)
+	}
+}
+
+func TestARequestForAnUnknownTenantIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	recorder := &fakeRecorder{}
+	mux := serve(t, recorder, ingest.Config{})
+
+	rec := post(t, mux, "/webhooks/nobody/stripe", []byte(`{}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if recorded := recorder.recorded(); len(recorded) != 0 {
+		t.Errorf("recorded %d requests, want none", len(recorded))
 	}
 }
