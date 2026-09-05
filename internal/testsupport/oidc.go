@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,8 +24,11 @@ import (
 type IdentityProvider struct {
 	Subject string
 	Email   string
-	Groups  []string
-	Verify  bool
+	Claims  []string
+	// TenantClaim is what this provider calls them, because not every one
+	// calls them the same thing.
+	TenantClaim string
+	Verify      bool
 
 	server *httptest.Server
 	key    *rsa.PrivateKey
@@ -143,8 +147,18 @@ func (i *IdentityProvider) token(w http.ResponseWriter, r *http.Request) {
 		user, _, _ := r.BasicAuth()
 		claims["aud"] = user
 	}
-	if len(i.Groups) > 0 {
-		claims["groups"] = i.Groups
+	if len(i.Claims) > 0 {
+		name := i.TenantClaim
+		if name == "" {
+			name = "groups"
+		}
+		// Claims nest at the provider, so a dotted name is a nested object.
+		outer, inner, nested := strings.Cut(name, ".")
+		if nested {
+			claims[outer] = map[string]any{inner: i.Claims}
+		} else {
+			claims[name] = i.Claims
+		}
 	}
 
 	signed, err := i.sign(claims)
