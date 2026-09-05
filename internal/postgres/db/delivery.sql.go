@@ -68,7 +68,7 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 }
 
 const claimUnplannedEvents = `-- name: ClaimUnplannedEvents :many
-select id, provider from inbound_event
+select id, tenant_id, provider, signature from inbound_event
 where planned_at is null
 order by received_at
 limit $1
@@ -76,10 +76,14 @@ for update skip locked
 `
 
 type ClaimUnplannedEventsRow struct {
-	ID       uuid.UUID
-	Provider string
+	ID        uuid.UUID
+	TenantID  uuid.UUID
+	Provider  string
+	Signature string
 }
 
+// A signature that was checked and failed is never delivered. One that was
+// never checked is: a provider with no verifier configured behaves as before.
 func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error) {
 	rows, err := q.db.Query(ctx, claimUnplannedEvents, limit)
 	if err != nil {
@@ -89,36 +93,12 @@ func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]Clai
 	items := []ClaimUnplannedEventsRow{}
 	for rows.Next() {
 		var i ClaimUnplannedEventsRow
-		if err := rows.Scan(&i.ID, &i.Provider); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const countDeliveriesByState = `-- name: CountDeliveriesByState :many
-select state, count(*) as total from delivery group by state order by state
-`
-
-type CountDeliveriesByStateRow struct {
-	State string
-	Total int64
-}
-
-func (q *Queries) CountDeliveriesByState(ctx context.Context) ([]CountDeliveriesByStateRow, error) {
-	rows, err := q.db.Query(ctx, countDeliveriesByState)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CountDeliveriesByStateRow{}
-	for rows.Next() {
-		var i CountDeliveriesByStateRow
-		if err := rows.Scan(&i.State, &i.Total); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Provider,
+			&i.Signature,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -131,7 +111,8 @@ func (q *Queries) CountDeliveriesByState(ctx context.Context) ([]CountDeliveries
 
 const countEventsAwaitingRoute = `-- name: CountEventsAwaitingRoute :one
 select count(*) from inbound_event e
-where e.planned_at is null
+where e.tenant_id = $1
+  and e.planned_at is null
   and not exists (
       select 1 from route r
       join destination d on d.id = r.destination_id and d.enabled
@@ -139,44 +120,50 @@ where e.planned_at is null
   )
 `
 
-func (q *Queries) CountEventsAwaitingRoute(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countEventsAwaitingRoute)
+func (q *Queries) CountEventsAwaitingRoute(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventsAwaitingRoute, tenantID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createDelivery = `-- name: CreateDelivery :exec
-insert into delivery (id, event_id, destination_id, state, next_attempt_at)
+insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
 values ($1, $2, $3, 'pending', now())
 on conflict (event_id, destination_id) do nothing
 `
 
 type CreateDeliveryParams struct {
-	ID            uuid.UUID
+	TenantID      uuid.UUID
 	EventID       uuid.UUID
 	DestinationID uuid.UUID
 }
 
 func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error {
-	_, err := q.db.Exec(ctx, createDelivery, arg.ID, arg.EventID, arg.DestinationID)
+	_, err := q.db.Exec(ctx, createDelivery, arg.TenantID, arg.EventID, arg.DestinationID)
 	return err
 }
 
 const createDestination = `-- name: CreateDestination :one
-insert into destination (id, name, url)
-values ($1, $2, $3)
-returning id, name, url, enabled, created_at
+insert into destination (tenant_id, name, url, transport)
+values ($1, $2, $3, $4)
+returning id, name, url, enabled, created_at, transport, tenant_id
 `
 
 type CreateDestinationParams struct {
-	ID   uuid.UUID
-	Name string
-	Url  string
+	TenantID  uuid.UUID
+	Name      string
+	Url       string
+	Transport string
 }
 
 func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationParams) (Destination, error) {
-	row := q.db.QueryRow(ctx, createDestination, arg.ID, arg.Name, arg.Url)
+	row := q.db.QueryRow(ctx, createDestination,
+		arg.TenantID,
+		arg.Name,
+		arg.Url,
+		arg.Transport,
+	)
 	var i Destination
 	err := row.Scan(
 		&i.ID,
@@ -184,29 +171,31 @@ func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationPa
 		&i.Url,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Transport,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const createRoute = `-- name: CreateRoute :exec
-insert into route (id, provider, destination_id)
+insert into route (tenant_id, provider, destination_id)
 values ($1, $2, $3)
-on conflict (provider, destination_id) do nothing
+on conflict (tenant_id, provider, destination_id) do nothing
 `
 
 type CreateRouteParams struct {
-	ID            uuid.UUID
+	TenantID      uuid.UUID
 	Provider      string
 	DestinationID uuid.UUID
 }
 
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) error {
-	_, err := q.db.Exec(ctx, createRoute, arg.ID, arg.Provider, arg.DestinationID)
+	_, err := q.db.Exec(ctx, createRoute, arg.TenantID, arg.Provider, arg.DestinationID)
 	return err
 }
 
 const deliveryTarget = `-- name: DeliveryTarget :one
-select d.url, e.provider, e.path, r.headers, r.body
+select d.url, d.transport, e.provider, e.path, r.headers, r.body
 from delivery dl
 join inbound_event e on e.id = dl.event_id
 join inbound_request r on r.event_id = dl.event_id
@@ -215,11 +204,12 @@ where dl.id = $1
 `
 
 type DeliveryTargetRow struct {
-	Url      string
-	Provider string
-	Path     string
-	Headers  []byte
-	Body     []byte
+	Url       string
+	Transport string
+	Provider  string
+	Path      string
+	Headers   []byte
+	Body      []byte
 }
 
 func (q *Queries) DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error) {
@@ -227,6 +217,7 @@ func (q *Queries) DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTar
 	var i DeliveryTargetRow
 	err := row.Scan(
 		&i.Url,
+		&i.Transport,
 		&i.Provider,
 		&i.Path,
 		&i.Headers,
@@ -236,11 +227,16 @@ func (q *Queries) DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTar
 }
 
 const destinationByName = `-- name: DestinationByName :one
-select id, name, url, enabled, created_at from destination where name = $1
+select id, name, url, enabled, created_at, transport, tenant_id from destination where tenant_id = $1 and name = $2
 `
 
-func (q *Queries) DestinationByName(ctx context.Context, name string) (Destination, error) {
-	row := q.db.QueryRow(ctx, destinationByName, name)
+type DestinationByNameParams struct {
+	TenantID uuid.UUID
+	Name     string
+}
+
+func (q *Queries) DestinationByName(ctx context.Context, arg DestinationByNameParams) (Destination, error) {
+	row := q.db.QueryRow(ctx, destinationByName, arg.TenantID, arg.Name)
 	var i Destination
 	err := row.Scan(
 		&i.ID,
@@ -248,6 +244,8 @@ func (q *Queries) DestinationByName(ctx context.Context, name string) (Destinati
 		&i.Url,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.Transport,
+		&i.TenantID,
 	)
 	return i, err
 }
@@ -255,11 +253,16 @@ func (q *Queries) DestinationByName(ctx context.Context, name string) (Destinati
 const enabledDestinationsForProvider = `-- name: EnabledDestinationsForProvider :many
 select d.id from route r
 join destination d on d.id = r.destination_id
-where r.provider = $1 and d.enabled
+where r.tenant_id = $1 and r.provider = $2 and d.enabled
 `
 
-func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, provider string) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, enabledDestinationsForProvider, provider)
+type EnabledDestinationsForProviderParams struct {
+	TenantID uuid.UUID
+	Provider string
+}
+
+func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, enabledDestinationsForProvider, arg.TenantID, arg.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -279,21 +282,23 @@ func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, provider s
 }
 
 const listRoutes = `-- name: ListRoutes :many
-select r.provider, d.name, d.url, d.enabled
+select r.provider, d.name, d.url, d.transport, d.enabled
 from route r
 join destination d on d.id = r.destination_id
+where r.tenant_id = $1
 order by r.provider, d.name
 `
 
 type ListRoutesRow struct {
-	Provider string
-	Name     string
-	Url      string
-	Enabled  bool
+	Provider  string
+	Name      string
+	Url       string
+	Transport string
+	Enabled   bool
 }
 
-func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
-	rows, err := q.db.Query(ctx, listRoutes)
+func (q *Queries) ListRoutes(ctx context.Context, tenantID uuid.UUID) ([]ListRoutesRow, error) {
+	rows, err := q.db.Query(ctx, listRoutes, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +310,7 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
 			&i.Provider,
 			&i.Name,
 			&i.Url,
+			&i.Transport,
 			&i.Enabled,
 		); err != nil {
 			return nil, err
@@ -386,6 +392,7 @@ with next as (
                     join route r on r.provider = e.provider
                     join destination d on d.id = r.destination_id and d.enabled
                     where e.planned_at is null
+                      and e.signature in ('unchecked', 'valid')
                 ) then now() end)
     ) as at
 )

@@ -21,6 +21,9 @@ Commands:
   dispatch  Deliver recorded events to their destinations
   route     Manage where a provider's events are delivered
   user      Create an operator who can sign in to the panel
+  verify    Configure how a provider's signature is checked
+  tenant    Manage the tenants events are recorded for
+  role      Manage roles, what they grant and who gets them
   migrate   Apply pending schema migrations and exit
   version   Print the build version and exit
   help      Print this message
@@ -53,6 +56,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return route(ctx, rest, stdout, stderr)
 	case "user":
 		return user(ctx, rest, stdout, stderr)
+	case "verify":
+		return verify(ctx, rest, stdout, stderr)
+	case "tenant":
+		return tenant(ctx, rest, stdout, stderr)
+	case "role":
+		return role(ctx, rest, stdout, stderr)
 	case "migrate":
 		return migrate(ctx, rest, stdout, stderr)
 	case "version":

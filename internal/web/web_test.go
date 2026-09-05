@@ -14,9 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edersonangelo/charon/internal/auth"
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/inbound"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 	"github.com/edersonangelo/charon/internal/testsupport"
 	"github.com/edersonangelo/charon/internal/web"
@@ -48,24 +51,26 @@ func setup(t *testing.T) (*postgres.Store, *httptest.Server, *http.Client, uuid.
 	if err != nil {
 		t.Fatalf("hashing the password: %v", err)
 	}
-	if err := store.CreateUser(ctx, email, hash); err != nil {
+	if err := store.CreateUser(ctx, email, hash, owner(t, store)); err != nil {
 		t.Fatalf("creating the user: %v", err)
 	}
 
-	eventID := uuid.Must(uuid.NewV7())
-	if err := store.Record(ctx, inbound.Request{
-		ID:         eventID,
+	eventID, err := store.Record(ctx, inbound.Request{
 		Provider:   "stripe",
 		Path:       "/webhooks/stripe",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{"Stripe-Signature": {"t=1,v1=deadbeef"}},
 		Body:       body,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording the event: %v", err)
 	}
 
+	methods := auth.NewRegistry()
+	methods.Register(auth.NewPassword(credentials{store}))
+
 	mux := http.NewServeMux()
-	web.New(store, web.Config{}).Register(mux)
+	web.New(store, web.Config{Auth: methods}).Register(mux)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
@@ -75,6 +80,74 @@ func setup(t *testing.T) (*postgres.Store, *httptest.Server, *http.Client, uuid.
 	}
 
 	return store, server, &http.Client{Jar: jar}, eventID
+}
+
+// owner places an operator in the tenant every deployment has, as the role
+// that can reach everything.
+func owner(t *testing.T, store *postgres.Store) console.Placement {
+	t.Helper()
+
+	tenant, err := store.TenantBySlug(context.Background(), postgres.DefaultSlug)
+	if err != nil {
+		t.Fatalf("reading the default tenant: %v", err)
+	}
+	return console.Placement{Tenant: tenant.ID, Role: "owner"}
+}
+
+// tenantNamed is the tenant a value from the provider names.
+func tenantNamed(t *testing.T, store *postgres.Store, slug string) uuid.UUID {
+	t.Helper()
+
+	found, err := store.TenantBySlug(context.Background(), slug)
+	if err != nil {
+		t.Fatalf("reading the tenant %q: %v", slug, err)
+	}
+	return found.ID
+}
+
+// roleOf is the role somebody holds in a tenant, which is what a membership
+// says rather than anything on the account.
+func roleOf(t *testing.T, store *postgres.Store, user, tenant uuid.UUID) string {
+	t.Helper()
+
+	name, member, err := store.RoleIn(context.Background(), user, tenant)
+	if err != nil {
+		t.Fatalf("reading the role: %v", err)
+	}
+	if !member {
+		return "(not a member)"
+	}
+	if name == "" {
+		return authz.Least
+	}
+	return name
+}
+
+func mustMemberships(t *testing.T, store *postgres.Store, user uuid.UUID) []console.Membership {
+	t.Helper()
+
+	held, err := store.Memberships(context.Background(), user)
+	if err != nil {
+		t.Fatalf("reading the memberships: %v", err)
+	}
+	return held
+}
+
+// jar is a cookie jar for a second client, so two operators can be signed in
+// at once inside one test.
+func jar(t *testing.T) *cookiejar.Jar {
+	t.Helper()
+	made, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("building a cookie jar: %v", err)
+	}
+	return made
+}
+
+// scoped is a context confined to the tenant the tests operate in.
+func scoped(t *testing.T, store *postgres.Store) context.Context {
+	t.Helper()
+	return authz.WithTenant(context.Background(), owner(t, store).Tenant)
 }
 
 // Returns a copy rather than the *http.Response, so callers cannot leak a body
@@ -123,7 +196,7 @@ func do(t *testing.T, client *http.Client, method, target string, form url.Value
 
 func signIn(t *testing.T, server *httptest.Server, client *http.Client, pass string) response {
 	t.Helper()
-	return do(t, client, http.MethodPost, server.URL+"/login", url.Values{
+	return do(t, client, http.MethodPost, server.URL+"/auth/"+auth.Password, url.Values{
 		"email":    {email},
 		"password": {pass},
 	})
@@ -204,15 +277,14 @@ func TestSearchNarrowsByProvider(t *testing.T) {
 	store, server, client, stripeEvent := setup(t)
 	signIn(t, server, client, password)
 
-	githubEvent := uuid.Must(uuid.NewV7())
-	if err := store.Record(context.Background(), inbound.Request{
-		ID:         githubEvent,
+	githubEvent, err := store.Record(context.Background(), inbound.Request{
 		Provider:   "github",
 		Path:       "/webhooks/github",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{},
 		Body:       []byte(`{"ref":"refs/heads/main"}`),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording a second event: %v", err)
 	}
 
@@ -251,7 +323,7 @@ func TestReplayReturnsADeadDeliveryToPendingAndKeepsItsHistory(t *testing.T) {
 	}))
 	t.Cleanup(refuse.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "refusing", refuse.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "refusing", refuse.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -438,15 +510,14 @@ func TestTheDetailIndentsJsonAndKeepsTheOriginalOneClickAway(t *testing.T) {
 	signIn(t, server, client, password)
 
 	minified := []byte(`{"evento":"alterado","id":26281,"pessoa":{"id":40104,"razao_social":"A"}}`)
-	jsonEvent := uuid.Must(uuid.NewV7())
-	if err := store.Record(context.Background(), inbound.Request{
-		ID:         jsonEvent,
+	jsonEvent, err := store.Record(context.Background(), inbound.Request{
 		Provider:   "indented",
 		Path:       "/webhooks/indented",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{"Content-Type": {"application/json"}},
 		Body:       minified,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording: %v", err)
 	}
 
@@ -458,15 +529,14 @@ func TestTheDetailIndentsJsonAndKeepsTheOriginalOneClickAway(t *testing.T) {
 		t.Error("the original body is not offered")
 	}
 
-	plainEvent := uuid.Must(uuid.NewV7())
-	if err := store.Record(context.Background(), inbound.Request{
-		ID:         plainEvent,
+	plainEvent, err := store.Record(context.Background(), inbound.Request{
 		Provider:   "not-json",
 		Path:       "/webhooks/not-json",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{},
 		Body:       []byte("status=paid&ref=xyz"),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording: %v", err)
 	}
 
@@ -518,7 +588,7 @@ func TestChangingARouteDoesNotResendUntilTheOperatorAsks(t *testing.T) {
 	}))
 	t.Cleanup(newTarget.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "moving", oldTarget.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "moving", oldTarget.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -603,7 +673,7 @@ func TestASecondRouteReachesEventsThatWereAlreadyPlanned(t *testing.T) {
 
 	dispatcher := delivery.New(store, delivery.Config{})
 
-	if err := store.AddRoute(ctx, "stripe", "one", one.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "one", one.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the first route: %v", err)
 	}
 	for range 2 {
@@ -616,7 +686,7 @@ func TestASecondRouteReachesEventsThatWereAlreadyPlanned(t *testing.T) {
 	}
 
 	// The event is planned by now. A second destination must still reach it.
-	if err := store.AddRoute(ctx, "stripe", "two", two.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "two", two.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the second route: %v", err)
 	}
 	for range 2 {
@@ -647,7 +717,7 @@ func TestSwitchingADestinationBackOnReachesEventsPlannedWhileItWasOff(t *testing
 	}))
 	t.Cleanup(target.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "off-then-on", target.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "off-then-on", target.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -754,7 +824,7 @@ func TestEveryReplayAnswersWithTheRegionItSwaps(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(target.Close)
-	if err := store.AddRoute(ctx, "stripe", "somewhere", target.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "somewhere", target.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 	if _, err := delivery.New(store, delivery.Config{}).Tick(ctx); err != nil {
@@ -806,15 +876,14 @@ func TestReplayingFromTheListKeepsTheFilters(t *testing.T) {
 	store, server, client, stripeEvent := setup(t)
 	signIn(t, server, client, password)
 
-	other := uuid.Must(uuid.NewV7())
-	if err := store.Record(context.Background(), inbound.Request{
-		ID:         other,
+	other, err := store.Record(context.Background(), inbound.Request{
 		Provider:   "github",
 		Path:       "/webhooks/github",
 		ReceivedAt: time.Now().UTC(),
 		Headers:    map[string][]string{},
 		Body:       body,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("recording: %v", err)
 	}
 
@@ -854,10 +923,10 @@ func TestReplayDoesNotReachADestinationThatIsNoLongerRouted(t *testing.T) {
 	}))
 	t.Cleanup(droppedTarget.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "kept", keptTarget.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "kept", keptTarget.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route to keep: %v", err)
 	}
-	if err := store.AddRoute(ctx, "stripe", "dropped", droppedTarget.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "dropped", droppedTarget.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route to drop: %v", err)
 	}
 
@@ -956,10 +1025,10 @@ func TestTheListSeparatesRoutedFromOrphanedAndShowsAttempts(t *testing.T) {
 	}))
 	t.Cleanup(dropped.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "refusing", refusing.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "refusing", refusing.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the refusing route: %v", err)
 	}
-	if err := store.AddRoute(ctx, "stripe", "dropped", dropped.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "dropped", dropped.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the route to drop: %v", err)
 	}
 
@@ -1033,7 +1102,7 @@ func TestTheDetailListsEveryDestinationBeforeTheAttemptHistory(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		t.Cleanup(target.Close)
-		if err := store.AddRoute(ctx, "stripe", name, target.URL); err != nil {
+		if err := store.AddRoute(ctx, "stripe", name, target.URL, outbound.HTTP); err != nil {
 			t.Fatalf("adding route %s: %v", name, err)
 		}
 	}
@@ -1087,21 +1156,23 @@ func TestFilteringByDeliveryState(t *testing.T) {
 	}))
 	t.Cleanup(refuses.Close)
 
-	deadEvent := uuid.Must(uuid.NewV7())
-	waitingEvent := uuid.Must(uuid.NewV7())
-	for id, provider := range map[uuid.UUID]string{deadEvent: "github", waitingEvent: "nobody"} {
-		if err := store.Record(ctx, inbound.Request{
-			ID: id, Provider: provider, Path: "/webhooks/" + provider,
+	recorded := map[string]uuid.UUID{}
+	for _, provider := range []string{"github", "nobody"} {
+		id, err := store.Record(ctx, inbound.Request{
+			Provider: provider, Path: "/webhooks/" + provider,
 			ReceivedAt: time.Now().UTC(), Headers: map[string][]string{}, Body: body,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("recording %s: %v", provider, err)
 		}
+		recorded[provider] = id
 	}
+	deadEvent, waitingEvent := recorded["github"], recorded["nobody"]
 
-	if err := store.AddRoute(ctx, "stripe", "accepts", accepts.URL); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "accepts", accepts.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the accepting route: %v", err)
 	}
-	if err := store.AddRoute(ctx, "github", "refuses", refuses.URL); err != nil {
+	if err := store.AddRoute(ctx, "github", "refuses", refuses.URL, outbound.HTTP); err != nil {
 		t.Fatalf("adding the refusing route: %v", err)
 	}
 
@@ -1143,4 +1214,11 @@ func TestFilteringByDeliveryState(t *testing.T) {
 	if !strings.Contains(page, `<option value="unrouted">awaiting a route</option>`) {
 		t.Error("the filter does not offer awaiting a route")
 	}
+}
+
+// credentials adapts the store to the port the password method declares.
+type credentials struct{ store *postgres.Store }
+
+func (c credentials) Verify(ctx context.Context, email, password string) (string, error) {
+	return c.store.VerifyPassword(ctx, email, password)
 }

@@ -1,6 +1,11 @@
 package web
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/edersonangelo/charon/internal/auth"
+	"github.com/edersonangelo/charon/internal/authz"
+)
 
 templ layout(title string, user string, summary Summary) {
 	<!DOCTYPE html>
@@ -8,18 +13,43 @@ templ layout(title string, user string, summary Summary) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<link rel="icon" href="/static/favicon.png" type="image/png"/>
 			<title>{ title } · Charon</title>
 			<script src="/static/htmx.min.js"></script>
 			<style>
 				:root { color-scheme: light dark; --line: #8883; --muted: #8889; }
 				* { box-sizing: border-box }
 				body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace }
-				body > header { display: flex; gap: 1.5rem; align-items: baseline;
-				                padding: .75rem 1.25rem; border-bottom: 1px solid var(--line) }
+				body > header { display: flex; flex-wrap: wrap; align-items: stretch;
+				                column-gap: 1.75rem; row-gap: .5rem;
+				                padding: .5rem 1.25rem; border-bottom: 1px solid var(--line) }
+				body > header > * { align-self: flex-end; padding-bottom: .5rem }
+				body > header nav { display: flex; flex-wrap: wrap; gap: 1.25rem }
+				body > header nav a.at { color: inherit; box-shadow: 0 2px 0 currentColor }
+				nav.areas { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0 0 1.25rem;
+				            padding-bottom: .5rem; border-bottom: 1px solid var(--line) }
+				nav.areas a { text-decoration: none; font-weight: 600 }
+				nav.areas a.at { color: inherit; box-shadow: 0 2px 0 currentColor }
+				dl.areas { margin: 0 }
+				dl.areas dt { margin-top: .9rem }
+				dl.areas dt a { font-weight: 600 }
+				dl.areas dd { margin: 0 }
+				body > header .session { display: flex; align-items: center; gap: .75rem }
+				body > header .acting { display: flex; align-items: center; gap: .3rem }
 				body > header a { text-decoration: none; font-weight: 600 }
-				body > header .spacer { margin-left: auto }
+				body > header .brand { display: inline-flex; align-items: center; gap: .65rem;
+				                       align-self: center; padding-bottom: 0;
+				                       font-weight: 700; font-size: 2.2rem; letter-spacing: -.02em }
+				body > header .brand img { display: block }
+				body > header .right { margin-left: auto; display: flex; flex-wrap: wrap;
+				                       justify-content: flex-end; align-items: center;
+				                       column-gap: 1.5rem; row-gap: .4rem }
 				main { padding: 1.25rem }
 				h1 { font-size: 1.1rem; margin: 0 0 1rem }
+				h2 { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 0 0 .5rem;
+				     text-transform: uppercase; letter-spacing: .04em }
+				h2 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;
+				            margin-left: .5rem; text-transform: none; letter-spacing: 0 }
 				table { border-collapse: collapse; width: 100% }
 				th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line);
 				         vertical-align: top; white-space: nowrap }
@@ -39,18 +69,23 @@ templ layout(title string, user string, summary Summary) {
 				h1 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;
 				            margin-left: .5rem }
 				.pill { padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 999px;
-				        font-size: .8rem }
+				        font-size: .8rem; margin-left: .4rem; white-space: nowrap }
 				.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }
 				.muted { color: var(--muted) }
-				.stats { display: flex; gap: 1rem; margin-left: auto; font-size: .85rem }
+				p.grants { display: flex; flex-wrap: wrap; align-items: baseline;
+				           gap: .25rem .9rem; margin: .5rem 0 0 }
+				p.grants .area { min-width: 7rem; color: var(--muted); font-size: .85rem }
+				p.grants label { font-size: .9rem }
+				.stats { display: flex; gap: 1rem; font-size: .85rem }
+				.stats span, body > header .pill, body > header button { white-space: nowrap }
 				section { margin-bottom: 1.5rem }
 				section.attention { border: 1px solid #c92; border-radius: 4px; padding: .75rem 1rem;
 				                    background: #cc99221a }
 				section.attention h1 { color: #c92 }
 				section form { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: 0 }
+				section form.stack { display: block }
 				label { display: inline-flex; gap: .25rem; align-items: center; white-space: nowrap }
-				section h1.muted { font-size: .85rem; font-weight: 600; margin: 1rem 0 .35rem;
-				                   text-transform: uppercase; letter-spacing: .04em }
+
 				tr[data-open] { cursor: pointer }
 				tr[data-open]:hover { background: #8881 }
 				dialog { width: min(64rem, 92vw); max-height: 86vh; padding: 0;
@@ -70,8 +105,16 @@ templ layout(title string, user string, summary Summary) {
 		</head>
 		<body>
 			<header>
-				<a href="/events">charon</a>
-				<a href="/routes" class="muted">routes</a>
+				<span class="brand">
+					<img src="/static/charon.png" alt="" width="104" height="104"/>Charon
+				</span>
+				<nav>
+					if may(ctx, authz.EventsRead) {
+						<a href="/events" class={ here(ctx, "/events") }>events</a>
+						<a href="/settings" class={ inSettings(ctx) }>settings</a>
+					}
+				</nav>
+				<span class="right">
 				<span class="stats" id="summary">
 					<span class="delivered">{ fmt.Sprint(summary.Delivered) } delivered</span>
 					<span class="pending">{ fmt.Sprint(summary.Pending) } pending</span>
@@ -80,9 +123,26 @@ templ layout(title string, user string, summary Summary) {
 						<span class="muted">{ fmt.Sprint(summary.AwaitingRoute) } awaiting a route</span>
 					}
 				</span>
-				<span class="spacer"></span>
-				<span class="muted">{ user }</span>
-				<form method="post" action="/logout"><button>sign out</button></form>
+				<span class="session">
+					if len(acting(ctx).Tenants) > 1 {
+						<form method="post" action="/acting-tenant" class="acting">
+							<select name="tenant" onchange="this.form.requestSubmit()">
+								for _, tenant := range acting(ctx).Tenants {
+									if tenant.Tenant == acting(ctx).Current {
+										<option value={ tenant.Slug } selected>{ tenant.Slug }</option>
+									} else {
+										<option value={ tenant.Slug }>{ tenant.Slug }</option>
+									}
+								}
+							</select>
+							<noscript><button>switch</button></noscript>
+						</form>
+					}
+					<span class="muted">{ user }</span>
+					<span class="pill">{ roleName(ctx) }</span>
+					<form method="post" action="/logout"><button>sign out</button></form>
+				</span>
+				</span>
 			</header>
 			<main>
 				{ children... }
@@ -150,16 +210,19 @@ templ layout(title string, user string, summary Summary) {
 	</html>
 }
 
-templ loginPage(failed bool, sso bool, notice string) {
+templ loginPage(methods []auth.Method, refused bool) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<link rel="icon" href="/static/favicon.png" type="image/png"/>
 			<title>Sign in · Charon</title>
 			<style>
 				:root { color-scheme: light dark }
 				body { margin: 0; height: 100vh; display: grid; place-items: center;
 				       font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace }
+				.brand { display: grid; justify-items: center; gap: .4rem; margin-bottom: 1.25rem }
 				form { display: grid; gap: .6rem; width: 18rem }
 				h1 { font-size: 1.1rem; margin: 0 0 .5rem }
 				input, button { font: inherit; padding: .4rem .5rem;
@@ -167,24 +230,41 @@ templ loginPage(failed bool, sso bool, notice string) {
 				                background: transparent; color: inherit }
 				button { cursor: pointer }
 				.error { color: #d44 }
+				.methods { display: grid; gap: .5rem; width: 18rem; margin-top: .5rem }
+				.muted { color: #8889; font-size: .85rem }
 			</style>
 		</head>
 		<body>
-			<form method="post" action="/login">
-				<h1>charon</h1>
-				if failed {
-					<span class="error">wrong email or password</span>
+			<div>
+				<div class="brand">
+					<img src="/static/charon.png" alt="" width="288" height="288"/>
+					<h1>Charon</h1>
+				</div>
+				if refused {
+					<span class="error">the credentials were refused</span>
 				}
-				if notice != "" {
-					<span class="error">{ notice }</span>
+				if len(methods) == 0 {
+					<p class="muted">
+						No way of signing in is configured. Create an operator with
+						<code>charon user add</code>.
+					</p>
 				}
-				<input type="email" name="email" placeholder="email" required autofocus/>
-				<input type="password" name="password" placeholder="password" required/>
-				<button>sign in</button>
-				if sso {
-					<a href="/auth/sso"><button type="button">sign in with single sign-on</button></a>
+				for _, method := range methods {
+					if method.Name() == auth.Password {
+						<form method="post" action={ templ.SafeURL("/auth/" + method.Name()) }>
+							<input type="email" name="email" placeholder="email" required autofocus/>
+							<input type="password" name="password" placeholder="password" required/>
+							<button>sign in</button>
+						</form>
+					} else {
+						<div class="methods">
+							<a href={ templ.SafeURL("/auth/" + method.Name() + "/start") }>
+								<button type="button">{ "sign in with " + method.Label() }</button>
+							</a>
+						</div>
+					}
 				}
-			</form>
+			</div>
 		</body>
 	</html>
 }

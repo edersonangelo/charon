@@ -14,21 +14,26 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/edersonangelo/charon/internal/auth"
+	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/health"
 	"github.com/edersonangelo/charon/internal/ingest"
 	"github.com/edersonangelo/charon/internal/postgres"
+	"github.com/edersonangelo/charon/internal/provider"
 	"github.com/edersonangelo/charon/internal/web"
 )
 
 type serveConfig struct {
-	addr         string
-	databaseURL  string
-	maxBodyBytes int64
-	logLevel     string
-	autoMigrate  bool
-	secureCookie bool
-	sessionTTL   time.Duration
-	oidc         web.OIDC
+	addr                string
+	databaseURL         string
+	maxBodyBytes        int64
+	logLevel            string
+	autoMigrate         bool
+	secureCookie        bool
+	sessionTTL          time.Duration
+	verificationRefresh time.Duration
+	oidc                auth.OIDCSettings
+	policy              auth.Policy
 }
 
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -55,16 +60,38 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
+	methods := signIn(cfg, store, logger)
+	transports := delivery.DefaultTransports()
+
+	// What this build knows how to do, said to the database, so a row can be
+	// pointed at by a key. A deployment that registers a transport or a way of
+	// signing in gets the row by starting.
+	if err := store.Register(ctx, postgres.Kinds{
+		Transports: transports.Kinds(),
+		Verifiers:  provider.Default().Kinds(),
+		Methods:    methods.Names(),
+	}); err != nil {
+		return err
+	}
+
+	verification := provider.NewCache(store, provider.Default(), cfg.verificationRefresh, logger)
+	watching, stopWatching := context.WithCancel(ctx)
+	defer stopWatching()
+	go verification.Watch(watching)
+
 	mux := http.NewServeMux()
 	ingest.New(store, ingest.Config{
 		MaxBodyBytes: cfg.maxBodyBytes,
+		Verification: verification,
 		Logger:       logger,
 	}).Register(mux)
 	health.New(store).Register(mux)
 	web.New(store, web.Config{
+		Auth:         methods,
+		Transports:   transports,
+		Policy:       cfg.policy,
 		SecureCookie: cfg.secureCookie,
 		SessionTTL:   cfg.sessionTTL,
-		OIDC:         cfg.oidc,
 		Logger:       logger,
 	}).Register(mux)
 
@@ -78,6 +105,28 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 
 	return serveUntilSignal(ctx, srv, logger)
+}
+
+// Isolation between tenants is enforced by row level security, and Postgres
+// The ways of signing in this deployment offers. Registering one is the whole
+// change: the panel routes and renders whatever is here.
+func signIn(cfg serveConfig, store *postgres.Store, logger *slog.Logger) *auth.Registry {
+	registry := auth.NewRegistry()
+	registry.Register(auth.NewPassword(storedCredentials{store}))
+
+	if cfg.oidc.Configured() {
+		cfg.oidc.SecureCookie = cfg.secureCookie
+		cfg.oidc.Logger = logger
+		registry.Register(auth.NewOIDC(cfg.oidc))
+	}
+	return registry
+}
+
+// storedCredentials adapts the store to the port the password method declares.
+type storedCredentials struct{ store *postgres.Store }
+
+func (c storedCredentials) Verify(ctx context.Context, email, password string) (string, error) {
+	return c.store.VerifyPassword(ctx, email, password)
 }
 
 // Drains on shutdown so a request already inside a transaction is not cut off.
@@ -169,6 +218,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 		"mark the panel session cookie Secure; turn on behind HTTPS")
 	fs.DurationVar(&cfg.sessionTTL, "session-ttl", 12*time.Hour,
 		"how long an operator stays signed in to the panel")
+	fs.DurationVar(&cfg.verificationRefresh, "verification-refresh", time.Minute,
+		"longest the signature settings can be stale before being reloaded anyway")
 
 	fs.StringVar(&cfg.oidc.Issuer, "oidc-issuer", envOr("CHARON_OIDC_ISSUER", ""),
 		"OpenID Connect issuer url, for example https://keycloak/realms/main (env CHARON_OIDC_ISSUER)")
@@ -177,14 +228,23 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.oidc.ClientSecret, "oidc-client-secret", envOr("CHARON_OIDC_CLIENT_SECRET", ""),
 		"OpenID Connect client secret (env CHARON_OIDC_CLIENT_SECRET)")
 	fs.StringVar(&cfg.oidc.RedirectURL, "oidc-redirect-url", envOr("CHARON_OIDC_REDIRECT_URL", ""),
-		"where the provider sends the operator back, ending in /auth/sso/callback (env CHARON_OIDC_REDIRECT_URL)")
+		"where the provider sends the operator back, ending in /auth/oidc/callback (env CHARON_OIDC_REDIRECT_URL)")
+	fs.StringVar(&cfg.oidc.TenantClaim, "oidc-tenant-claim",
+		envOr("CHARON_OIDC_TENANT_CLAIM", auth.DefaultTenantClaim),
+		"claim whose values name the tenants an identity belongs to; "+
+			"providers differ on what they call it (env CHARON_OIDC_TENANT_CLAIM)")
 	scopes := fs.String("oidc-scopes", envOr("CHARON_OIDC_SCOPES", "openid,profile,email"),
 		"comma separated scopes to request (env CHARON_OIDC_SCOPES)")
-	fs.BoolVar(&cfg.oidc.AutoProvision, "oidc-auto-provision",
-		envOr("CHARON_OIDC_AUTO_PROVISION", "") != "",
-		"create an operator on first single sign-on instead of requiring one to exist (env CHARON_OIDC_AUTO_PROVISION)")
-	fs.StringVar(&cfg.oidc.RequiredGroup, "oidc-required-group", envOr("CHARON_OIDC_REQUIRED_GROUP", ""),
-		"only accept accounts carrying this value in the groups claim (env CHARON_OIDC_REQUIRED_GROUP)")
+	fs.BoolVar(&cfg.policy.AutoProvision, "auto-provision",
+		envOr("CHARON_AUTO_PROVISION", "") != "",
+		"create an operator on first sign-on instead of requiring one to exist (env CHARON_AUTO_PROVISION)")
+	fs.BoolVar(&cfg.policy.AcceptUnverifiedEmail, "accept-unverified-email",
+		envOr("CHARON_ACCEPT_UNVERIFIED_EMAIL", "") != "",
+		"admit identities whose provider does not verify addresses, "+
+			"for a provider where they are not self-asserted "+
+			"(env CHARON_ACCEPT_UNVERIFIED_EMAIL)")
+	fs.StringVar(&cfg.policy.RequiredClaim, "required-claim", envOr("CHARON_REQUIRED_CLAIM", ""),
+		"only accept identities carrying this value (env CHARON_REQUIRED_CLAIM)")
 
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, fmt.Errorf("parsing flags: %w", err)

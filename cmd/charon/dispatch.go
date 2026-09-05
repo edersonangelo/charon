@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/edersonangelo/charon/internal/delivery"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
@@ -64,7 +65,8 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	return dispatcher.Run(ctx)
 }
 
-var errRouteUsage = errors.New("usage: charon route add -provider <name> -url <url> [-destination <name>] | charon route list")
+var errRouteUsage = errors.New("usage: charon route add -provider <name> -url <url> " +
+	"[-destination <name>] [-tenant <slug>] | charon route list")
 
 func route(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -89,7 +91,9 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		"PostgreSQL connection string (env CHARON_DATABASE_URL)")
 	provider := fs.String("provider", "", "the provider whose events are routed")
 	url := fs.String("url", "", "where the events are delivered")
+	transport := fs.String("transport", outbound.HTTP, "kind of destination")
 	destination := fs.String("destination", "", "name for the destination, defaults to the provider")
+	slug := tenantFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing flags: %w", err)
@@ -110,7 +114,12 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	defer store.Close()
 
-	if err := store.AddRoute(ctx, *provider, *destination, *url); err != nil {
+	ctx, err = scoped(ctx, store, *slug)
+	if err != nil {
+		return err
+	}
+
+	if err := store.AddRoute(ctx, *provider, *destination, *url, *transport); err != nil {
 		return err
 	}
 
@@ -119,20 +128,7 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 }
 
 func routeList(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("charon route list", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	databaseURL := fs.String("database-url", envOr("CHARON_DATABASE_URL", ""),
-		"PostgreSQL connection string (env CHARON_DATABASE_URL)")
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parsing flags: %w", err)
-	}
-	if *databaseURL == "" {
-		return errMissingDatabaseURL
-	}
-
-	store, err := postgres.Open(ctx, *databaseURL)
+	ctx, store, err := openScoped(ctx, "charon route list", args, stderr)
 	if err != nil {
 		return err
 	}
@@ -152,8 +148,8 @@ func routeList(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if !r.Enabled {
 			state = "disabled"
 		}
-		if _, err := fmt.Fprintf(stdout, "%-20s %-20s %-8s %s\n",
-			r.Provider, r.Destination, state, r.URL); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%-20s %-20s %-8s %-8s %s\n",
+			r.Provider, r.Destination, r.Transport, state, r.URL); err != nil {
 			return err
 		}
 	}

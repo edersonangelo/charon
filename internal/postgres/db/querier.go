@@ -13,63 +13,118 @@ import (
 
 type Querier interface {
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
+	// A signature that was checked and failed is never delivered. One that was
+	// never checked is: a provider with no verifier configured behaves as before.
 	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
-	CountDeliveriesByState(ctx context.Context) ([]CountDeliveriesByStateRow, error)
-	CountEventsAwaitingRoute(ctx context.Context) (int64, error)
+	ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error
+	ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
+	ClearSystemAdminByEmail(ctx context.Context, email string) (int64, error)
+	CountEventsAwaitingRoute(ctx context.Context, tenantID uuid.UUID) (int64, error)
 	CountInboundEvents(ctx context.Context) (int64, error)
 	CountPanelUsers(ctx context.Context) (int64, error)
+	CountSystemAdmins(ctx context.Context) (int64, error)
+	CountTenants(ctx context.Context) (int64, error)
 	CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error
 	CreateDestination(ctx context.Context, arg CreateDestinationParams) (Destination, error)
-	CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) error
+	CreateInboundEvent(ctx context.Context, arg CreateInboundEventParams) (uuid.UUID, error)
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
 	CreatePanelSession(ctx context.Context, arg CreatePanelSessionParams) error
-	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) error
+	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error)
 	CreateRoute(ctx context.Context, arg CreateRouteParams) error
 	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
+	CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error
+	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	DeleteExpiredPanelSessions(ctx context.Context) error
 	DeletePanelSession(ctx context.Context, token []byte) error
-	DeleteRoute(ctx context.Context, id uuid.UUID) error
-	DeliveryAttempts(ctx context.Context, deliveryID uuid.UUID) ([]DeliveryAttemptsRow, error)
-	DeliveryStateTotals(ctx context.Context) ([]DeliveryStateTotalsRow, error)
+	DeletePanelUser(ctx context.Context, arg DeletePanelUserParams) (int64, error)
+	DeleteProvider(ctx context.Context, arg DeleteProviderParams) error
+	DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, error)
+	DeleteRoute(ctx context.Context, arg DeleteRouteParams) error
+	DeleteTenant(ctx context.Context, slug string) error
+	DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error)
+	DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
-	DestinationByName(ctx context.Context, name string) (Destination, error)
-	DetailedRoutes(ctx context.Context) ([]DetailedRoutesRow, error)
-	DistinctProviders(ctx context.Context) ([]string, error)
-	EnabledDestinationsForProvider(ctx context.Context, provider string) ([]uuid.UUID, error)
-	EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]EventDeliveriesRow, error)
-	EventDetail(ctx context.Context, id uuid.UUID) (EventDetailRow, error)
-	GetInboundEvent(ctx context.Context, id uuid.UUID) (InboundEvent, error)
-	GetInboundRequest(ctx context.Context, eventID uuid.UUID) (InboundRequest, error)
+	DestinationByName(ctx context.Context, arg DestinationByNameParams) (Destination, error)
+	DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error)
+	DistinctProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error)
+	EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error)
+	EventDeliveries(ctx context.Context, arg EventDeliveriesParams) ([]EventDeliveriesRow, error)
+	EventDetail(ctx context.Context, arg EventDetailParams) (EventDetailRow, error)
+	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
+	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
+	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
+	// A value that names only a tenant leaves the role to whoever decides it here,
+	// so arriving again does not undo it.
+	JoinFromProvider(ctx context.Context, arg JoinFromProviderParams) error
+	// A value that names the role too makes the token the truth about it as well.
+	JoinFromProviderAs(ctx context.Context, arg JoinFromProviderAsParams) error
+	JoinTenant(ctx context.Context, arg JoinTenantParams) error
+	LeaveEveryTenant(ctx context.Context, userID uuid.UUID) error
+	LeaveEveryTenantByEmail(ctx context.Context, email string) error
+	LeaveTenantsNoLongerNamed(ctx context.Context, arg LeaveTenantsNoLongerNamedParams) error
 	LinkSubjectToUser(ctx context.Context, arg LinkSubjectToUserParams) (PanelUser, error)
 	ListRecentInboundEvents(ctx context.Context, limit int32) ([]InboundEvent, error)
-	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
+	ListRoutes(ctx context.Context, tenantID uuid.UUID) ([]ListRoutesRow, error)
 	MarkDelivered(ctx context.Context, arg MarkDeliveredParams) error
 	MarkEventPlanned(ctx context.Context, id uuid.UUID) error
 	MarkFailed(ctx context.Context, arg MarkFailedParams) error
+	MarkSignature(ctx context.Context, arg MarkSignatureParams) error
+	MarkSignatureAndReopen(ctx context.Context, arg MarkSignatureAndReopenParams) error
+	MembershipIn(ctx context.Context, arg MembershipInParams) (string, error)
+	Memberships(ctx context.Context, userID uuid.UUID) ([]MembershipsRow, error)
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
 	NotifyPanel(ctx context.Context) error
+	NotifyProviders(ctx context.Context) error
 	NotifyWork(ctx context.Context) error
 	OldestPendingAge(ctx context.Context) (float64, error)
 	PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error)
 	PanelUserByEmail(ctx context.Context, email string) (PanelUser, error)
 	PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Text) (PanelUser, error)
+	PanelUsers(ctx context.Context, tenantID uuid.UUID) ([]PanelUsersRow, error)
+	Permissions(ctx context.Context) ([]PermissionsRow, error)
+	PlacementsPointedAt(ctx context.Context, arg PlacementsPointedAtParams) ([]PlacementsPointedAtRow, error)
+	PointValueAt(ctx context.Context, arg PointValueAtParams) error
 	ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlreadyRoutedToParams) (bool, error)
+	Providers(ctx context.Context, tenantID uuid.UUID) ([]ProvidersRow, error)
 	RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error
+	RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]RefusedByProviderRow, error)
+	RegisterAuthMethod(ctx context.Context, name string) error
+	RegisterTransport(ctx context.Context, name string) error
+	RegisterVerifier(ctx context.Context, name string) error
 	// A replay only reopens deliveries whose destination is still routed for this
 	// event's provider and still enabled. Anything else is history: the routes page
 	// is the truth about where events go.
-	ReplayDelivery(ctx context.Context, id uuid.UUID) (int64, error)
-	ReplayDestination(ctx context.Context, destinationID uuid.UUID) (int64, error)
-	ReplayEvent(ctx context.Context, eventID uuid.UUID) (int64, error)
-	RouteByID(ctx context.Context, id uuid.UUID) (RouteByIDRow, error)
+	ReplayDelivery(ctx context.Context, arg ReplayDeliveryParams) (int64, error)
+	ReplayDestination(ctx context.Context, arg ReplayDestinationParams) (int64, error)
+	ReplayEvent(ctx context.Context, arg ReplayEventParams) (int64, error)
+	Role(ctx context.Context, arg RoleParams) (RoleRow, error)
+	RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, error)
+	RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uuid.UUID, error)
+	Roles(ctx context.Context, tenantID pgtype.UUID) ([]RolesRow, error)
+	RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByIDRow, error)
 	// The state counts only take deliveries whose destination is still routed and
 	// enabled, so the numbers reconcile with the routes page. What is left over is
 	// reported apart as history.
 	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
-	UnplanEvent(ctx context.Context, id uuid.UUID) error
-	UnplanProvider(ctx context.Context, provider string) (int64, error)
-	UnroutedProviders(ctx context.Context) ([]UnroutedProvidersRow, error)
+	SetProvider(ctx context.Context, arg SetProviderParams) error
+	SetRole(ctx context.Context, arg SetRoleParams) (uuid.UUID, error)
+	// Becoming one means leaving the role behind, and with it the tenant the role
+	// belonged to; giving it up means being given a role again.
+	SetSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
+	SetSystemAdminByEmail(ctx context.Context, email string) (int64, error)
+	SignatureTotals(ctx context.Context) ([]SignatureTotalsRow, error)
+	StopPointingValue(ctx context.Context, arg StopPointingValueParams) error
+	SystemAdmins(ctx context.Context) ([]SystemAdminsRow, error)
+	TenantBySlug(ctx context.Context, slug string) (Tenant, error)
+	Tenants(ctx context.Context) ([]Tenant, error)
+	TenantsNamed(ctx context.Context, dollar_1 []string) ([]TenantsNamedRow, error)
+	UnplanEvent(ctx context.Context, arg UnplanEventParams) error
+	UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error)
+	UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error)
+	UnverifiedEvents(ctx context.Context, arg UnverifiedEventsParams) ([]UnverifiedEventsRow, error)
 	UpdateDestination(ctx context.Context, arg UpdateDestinationParams) error
+	UpdatePanelUserRole(ctx context.Context, arg UpdatePanelUserRoleParams) (int64, error)
+	ValuesPointedAtTenant(ctx context.Context, tenantID uuid.UUID) ([]ValuesPointedAtTenantRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

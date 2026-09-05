@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuthMethod struct {
+	Name        string
+	Description string
+}
+
+type ClaimPlacement struct {
+	Method    string
+	Value     string
+	TenantID  uuid.UUID
+	RoleID    pgtype.UUID
+	CreatedAt time.Time
+}
+
 type Delivery struct {
 	ID            uuid.UUID
 	EventID       uuid.UUID
@@ -25,6 +38,7 @@ type Delivery struct {
 	CreatedAt     time.Time
 	ReplayCount   int32
 	ReplayedAt    pgtype.Timestamptz
+	TenantID      uuid.UUID
 }
 
 type DeliveryAttempt struct {
@@ -36,6 +50,12 @@ type DeliveryAttempt struct {
 	Error       pgtype.Text
 	DurationMs  int32
 	Round       int32
+	TenantID    uuid.UUID
+}
+
+type DeliveryState struct {
+	Name        string
+	Description string
 }
 
 type Destination struct {
@@ -44,6 +64,8 @@ type Destination struct {
 	Url       string
 	Enabled   bool
 	CreatedAt time.Time
+	Transport string
+	TenantID  uuid.UUID
 }
 
 type InboundEvent struct {
@@ -53,12 +75,22 @@ type InboundEvent struct {
 	ReceivedAt time.Time
 	BodySize   int32
 	PlannedAt  pgtype.Timestamptz
+	Signature  string
+	TenantID   uuid.UUID
 }
 
 type InboundRequest struct {
-	EventID uuid.UUID
-	Headers []byte
-	Body    []byte
+	EventID  uuid.UUID
+	Headers  []byte
+	Body     []byte
+	TenantID uuid.UUID
+}
+
+type Membership struct {
+	UserID    uuid.UUID
+	TenantID  uuid.UUID
+	RoleID    pgtype.UUID
+	CreatedAt time.Time
 }
 
 type PanelSession struct {
@@ -74,6 +106,42 @@ type PanelUser struct {
 	PasswordHash pgtype.Text
 	CreatedAt    time.Time
 	OidcSubject  pgtype.Text
+	SystemAdmin  bool
+}
+
+type Permission struct {
+	ID          uuid.UUID
+	Name        string
+	Description string
+}
+
+type Provider struct {
+	Name             string
+	Verifier         string
+	SecretEnv        string
+	SignatureHeader  pgtype.Text
+	ToleranceSeconds int32
+	CreatedAt        time.Time
+	Scheme           string
+	Algorithm        string
+	Encoding         string
+	TimestampKey     string
+	SignatureKey     string
+	TenantID         uuid.UUID
+}
+
+type Role struct {
+	TenantID    pgtype.UUID
+	Name        string
+	Description string
+	BuiltIn     bool
+	CreatedAt   time.Time
+	ID          uuid.UUID
+}
+
+type RoleGrant struct {
+	RoleID       uuid.UUID
+	PermissionID uuid.UUID
 }
 
 type Route struct {
@@ -81,4 +149,32 @@ type Route struct {
 	Provider      string
 	DestinationID uuid.UUID
 	CreatedAt     time.Time
+	TenantID      uuid.UUID
+}
+
+type SchemaMigration struct {
+	Name      string
+	AppliedAt time.Time
+}
+
+type SignatureState struct {
+	Name        string
+	Description string
+}
+
+type Tenant struct {
+	ID        uuid.UUID
+	Slug      string
+	Name      string
+	CreatedAt time.Time
+}
+
+type Transport struct {
+	Name        string
+	Description string
+}
+
+type Verifier struct {
+	Name        string
+	Description string
 }

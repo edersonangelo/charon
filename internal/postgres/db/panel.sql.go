@@ -13,12 +13,67 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearRoleGrants = `-- name: ClearRoleGrants :exec
+delete from role_grant where role_id = $1
+`
+
+func (q *Queries) ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearRoleGrants, roleID)
+	return err
+}
+
+const clearSystemAdmin = `-- name: ClearSystemAdmin :execrows
+update panel_user set system_admin = false where id = $1
+`
+
+func (q *Queries) ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, clearSystemAdmin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearSystemAdminByEmail = `-- name: ClearSystemAdminByEmail :execrows
+update panel_user set system_admin = false where email = $1
+`
+
+func (q *Queries) ClearSystemAdminByEmail(ctx context.Context, email string) (int64, error) {
+	result, err := q.db.Exec(ctx, clearSystemAdminByEmail, email)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countPanelUsers = `-- name: CountPanelUsers :one
 select count(*) from panel_user
 `
 
 func (q *Queries) CountPanelUsers(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countPanelUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSystemAdmins = `-- name: CountSystemAdmins :one
+select count(*) from panel_user where system_admin
+`
+
+func (q *Queries) CountSystemAdmins(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSystemAdmins)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTenants = `-- name: CountTenants :one
+select count(*) from tenant
+`
+
+func (q *Queries) CountTenants(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countTenants)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -40,36 +95,37 @@ func (q *Queries) CreatePanelSession(ctx context.Context, arg CreatePanelSession
 	return err
 }
 
-const createPanelUser = `-- name: CreatePanelUser :exec
-insert into panel_user (id, email, password_hash)
-values ($1, $2, $3)
+const createPanelUser = `-- name: CreatePanelUser :one
+insert into panel_user (email, password_hash)
+values ($1, $2)
+returning id
 `
 
 type CreatePanelUserParams struct {
-	ID           uuid.UUID
 	Email        string
 	PasswordHash pgtype.Text
 }
 
-func (q *Queries) CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) error {
-	_, err := q.db.Exec(ctx, createPanelUser, arg.ID, arg.Email, arg.PasswordHash)
-	return err
+func (q *Queries) CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createPanelUser, arg.Email, arg.PasswordHash)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const createSSOUser = `-- name: CreateSSOUser :one
-insert into panel_user (id, email, oidc_subject)
-values ($1, $2, $3)
-returning id, email, password_hash, created_at, oidc_subject
+insert into panel_user (email, oidc_subject)
+values ($1, $2)
+returning id, email, password_hash, created_at, oidc_subject, system_admin
 `
 
 type CreateSSOUserParams struct {
-	ID          uuid.UUID
 	Email       string
 	OidcSubject pgtype.Text
 }
 
 func (q *Queries) CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error) {
-	row := q.db.QueryRow(ctx, createSSOUser, arg.ID, arg.Email, arg.OidcSubject)
+	row := q.db.QueryRow(ctx, createSSOUser, arg.Email, arg.OidcSubject)
 	var i PanelUser
 	err := row.Scan(
 		&i.ID,
@@ -77,8 +133,24 @@ func (q *Queries) CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (P
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.SystemAdmin,
 	)
 	return i, err
+}
+
+const createSystemAdmin = `-- name: CreateSystemAdmin :exec
+insert into panel_user (email, password_hash, system_admin)
+values ($1, $2, true)
+`
+
+type CreateSystemAdminParams struct {
+	Email        string
+	PasswordHash pgtype.Text
+}
+
+func (q *Queries) CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error {
+	_, err := q.db.Exec(ctx, createSystemAdmin, arg.Email, arg.PasswordHash)
+	return err
 }
 
 const deleteExpiredPanelSessions = `-- name: DeleteExpiredPanelSessions :exec
@@ -99,21 +171,65 @@ func (q *Queries) DeletePanelSession(ctx context.Context, token []byte) error {
 	return err
 }
 
-const deleteRoute = `-- name: DeleteRoute :exec
-delete from route where id = $1
+const deletePanelUser = `-- name: DeletePanelUser :execrows
+delete from membership where user_id = $1 and tenant_id = $2
 `
 
-func (q *Queries) DeleteRoute(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteRoute, id)
+type DeletePanelUserParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) DeletePanelUser(ctx context.Context, arg DeletePanelUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePanelUser, arg.UserID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRole = `-- name: DeleteRole :execrows
+delete from role where tenant_id = $1 and name = $2 and not built_in
+`
+
+type DeleteRoleParams struct {
+	TenantID pgtype.UUID
+	Name     string
+}
+
+func (q *Queries) DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRole, arg.TenantID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRoute = `-- name: DeleteRoute :exec
+delete from route where id = $1 and tenant_id = $2
+`
+
+type DeleteRouteParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) DeleteRoute(ctx context.Context, arg DeleteRouteParams) error {
+	_, err := q.db.Exec(ctx, deleteRoute, arg.ID, arg.TenantID)
 	return err
 }
 
 const deliveryAttempts = `-- name: DeliveryAttempts :many
 select round, attempt, attempted_at, status, error, duration_ms
 from delivery_attempt
-where delivery_id = $1
+where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc
 `
+
+type DeliveryAttemptsParams struct {
+	DeliveryID uuid.UUID
+	TenantID   uuid.UUID
+}
 
 type DeliveryAttemptsRow struct {
 	Round       int32
@@ -124,8 +240,8 @@ type DeliveryAttemptsRow struct {
 	DurationMs  int32
 }
 
-func (q *Queries) DeliveryAttempts(ctx context.Context, deliveryID uuid.UUID) ([]DeliveryAttemptsRow, error) {
-	rows, err := q.db.Query(ctx, deliveryAttempts, deliveryID)
+func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, deliveryAttempts, arg.DeliveryID, arg.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +268,7 @@ func (q *Queries) DeliveryAttempts(ctx context.Context, deliveryID uuid.UUID) ([
 }
 
 const deliveryStateTotals = `-- name: DeliveryStateTotals :many
-select state, count(*) as total from delivery group by state
+select state, count(*) as total from delivery where tenant_id = $1 group by state
 `
 
 type DeliveryStateTotalsRow struct {
@@ -160,8 +276,8 @@ type DeliveryStateTotalsRow struct {
 	Total int64
 }
 
-func (q *Queries) DeliveryStateTotals(ctx context.Context) ([]DeliveryStateTotalsRow, error) {
-	rows, err := q.db.Query(ctx, deliveryStateTotals)
+func (q *Queries) DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error) {
+	rows, err := q.db.Query(ctx, deliveryStateTotals, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -181,10 +297,11 @@ func (q *Queries) DeliveryStateTotals(ctx context.Context) ([]DeliveryStateTotal
 }
 
 const detailedRoutes = `-- name: DetailedRoutes :many
-select r.id, r.provider, d.id as destination_id, d.name, d.url, d.enabled,
+select r.id, r.provider, d.id as destination_id, d.name, d.url, d.transport, d.enabled,
        (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries
 from route r
 join destination d on d.id = r.destination_id
+where r.tenant_id = $1
 order by r.provider, d.name
 `
 
@@ -194,12 +311,13 @@ type DetailedRoutesRow struct {
 	DestinationID uuid.UUID
 	Name          string
 	Url           string
+	Transport     string
 	Enabled       bool
 	Deliveries    int64
 }
 
-func (q *Queries) DetailedRoutes(ctx context.Context) ([]DetailedRoutesRow, error) {
-	rows, err := q.db.Query(ctx, detailedRoutes)
+func (q *Queries) DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error) {
+	rows, err := q.db.Query(ctx, detailedRoutes, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +331,7 @@ func (q *Queries) DetailedRoutes(ctx context.Context) ([]DetailedRoutesRow, erro
 			&i.DestinationID,
 			&i.Name,
 			&i.Url,
+			&i.Transport,
 			&i.Enabled,
 			&i.Deliveries,
 		); err != nil {
@@ -227,11 +346,11 @@ func (q *Queries) DetailedRoutes(ctx context.Context) ([]DetailedRoutesRow, erro
 }
 
 const distinctProviders = `-- name: DistinctProviders :many
-select distinct provider from inbound_event order by provider
+select distinct provider from inbound_event where tenant_id = $1 order by provider
 `
 
-func (q *Queries) DistinctProviders(ctx context.Context) ([]string, error) {
-	rows, err := q.db.Query(ctx, distinctProviders)
+func (q *Queries) DistinctProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, distinctProviders, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -263,9 +382,14 @@ select d.id, dest.name as destination, dest.url, d.state, d.attempts,
        )::boolean as routed
 from delivery d
 join destination dest on dest.id = d.destination_id
-where d.event_id = $1
+where d.event_id = $1 and d.tenant_id = $2
 order by dest.name
 `
+
+type EventDeliveriesParams struct {
+	EventID  uuid.UUID
+	TenantID uuid.UUID
+}
 
 type EventDeliveriesRow struct {
 	ID            uuid.UUID
@@ -282,8 +406,8 @@ type EventDeliveriesRow struct {
 	Routed        bool
 }
 
-func (q *Queries) EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]EventDeliveriesRow, error) {
-	rows, err := q.db.Query(ctx, eventDeliveries, eventID)
+func (q *Queries) EventDeliveries(ctx context.Context, arg EventDeliveriesParams) ([]EventDeliveriesRow, error) {
+	rows, err := q.db.Query(ctx, eventDeliveries, arg.EventID, arg.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -317,11 +441,16 @@ func (q *Queries) EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]Eve
 
 const eventDetail = `-- name: EventDetail :one
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.planned_at,
-       r.headers, r.body
+       e.signature, r.headers, r.body
 from inbound_event e
 join inbound_request r on r.event_id = e.id
-where e.id = $1
+where e.id = $1 and e.tenant_id = $2
 `
+
+type EventDetailParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
 
 type EventDetailRow struct {
 	ID         uuid.UUID
@@ -330,12 +459,13 @@ type EventDetailRow struct {
 	ReceivedAt time.Time
 	BodySize   int32
 	PlannedAt  pgtype.Timestamptz
+	Signature  string
 	Headers    []byte
 	Body       []byte
 }
 
-func (q *Queries) EventDetail(ctx context.Context, id uuid.UUID) (EventDetailRow, error) {
-	row := q.db.QueryRow(ctx, eventDetail, id)
+func (q *Queries) EventDetail(ctx context.Context, arg EventDetailParams) (EventDetailRow, error) {
+	row := q.db.QueryRow(ctx, eventDetail, arg.ID, arg.TenantID)
 	var i EventDetailRow
 	err := row.Scan(
 		&i.ID,
@@ -344,14 +474,116 @@ func (q *Queries) EventDetail(ctx context.Context, id uuid.UUID) (EventDetailRow
 		&i.ReceivedAt,
 		&i.BodySize,
 		&i.PlannedAt,
+		&i.Signature,
 		&i.Headers,
 		&i.Body,
 	)
 	return i, err
 }
 
+const grantPermission = `-- name: GrantPermission :exec
+insert into role_grant (role_id, permission_id)
+select $1, p.id from permission p where p.name = $2
+on conflict do nothing
+`
+
+type GrantPermissionParams struct {
+	RoleID uuid.UUID
+	Name   string
+}
+
+func (q *Queries) GrantPermission(ctx context.Context, arg GrantPermissionParams) error {
+	_, err := q.db.Exec(ctx, grantPermission, arg.RoleID, arg.Name)
+	return err
+}
+
+const joinFromProvider = `-- name: JoinFromProvider :exec
+insert into membership (user_id, tenant_id)
+values ($1, $2)
+on conflict (user_id, tenant_id) do nothing
+`
+
+type JoinFromProviderParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+}
+
+// A value that names only a tenant leaves the role to whoever decides it here,
+// so arriving again does not undo it.
+func (q *Queries) JoinFromProvider(ctx context.Context, arg JoinFromProviderParams) error {
+	_, err := q.db.Exec(ctx, joinFromProvider, arg.UserID, arg.TenantID)
+	return err
+}
+
+const joinFromProviderAs = `-- name: JoinFromProviderAs :exec
+insert into membership (user_id, tenant_id, role_id)
+values ($1, $2, $3)
+on conflict (user_id, tenant_id) do update set role_id = excluded.role_id
+`
+
+type JoinFromProviderAsParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+	RoleID   pgtype.UUID
+}
+
+// A value that names the role too makes the token the truth about it as well.
+func (q *Queries) JoinFromProviderAs(ctx context.Context, arg JoinFromProviderAsParams) error {
+	_, err := q.db.Exec(ctx, joinFromProviderAs, arg.UserID, arg.TenantID, arg.RoleID)
+	return err
+}
+
+const joinTenant = `-- name: JoinTenant :exec
+insert into membership (user_id, tenant_id, role_id)
+values ($1, $2, $3)
+on conflict (user_id, tenant_id) do update set role_id = excluded.role_id
+`
+
+type JoinTenantParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+	RoleID   pgtype.UUID
+}
+
+func (q *Queries) JoinTenant(ctx context.Context, arg JoinTenantParams) error {
+	_, err := q.db.Exec(ctx, joinTenant, arg.UserID, arg.TenantID, arg.RoleID)
+	return err
+}
+
+const leaveEveryTenant = `-- name: LeaveEveryTenant :exec
+delete from membership where user_id = $1
+`
+
+func (q *Queries) LeaveEveryTenant(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, leaveEveryTenant, userID)
+	return err
+}
+
+const leaveEveryTenantByEmail = `-- name: LeaveEveryTenantByEmail :exec
+delete from membership where user_id in (select id from panel_user where email = $1)
+`
+
+func (q *Queries) LeaveEveryTenantByEmail(ctx context.Context, email string) error {
+	_, err := q.db.Exec(ctx, leaveEveryTenantByEmail, email)
+	return err
+}
+
+const leaveTenantsNoLongerNamed = `-- name: LeaveTenantsNoLongerNamed :exec
+delete from membership where user_id = $1 and tenant_id <> all($2::uuid[])
+`
+
+type LeaveTenantsNoLongerNamedParams struct {
+	UserID  uuid.UUID
+	Column2 []uuid.UUID
+}
+
+func (q *Queries) LeaveTenantsNoLongerNamed(ctx context.Context, arg LeaveTenantsNoLongerNamedParams) error {
+	_, err := q.db.Exec(ctx, leaveTenantsNoLongerNamed, arg.UserID, arg.Column2)
+	return err
+}
+
 const linkSubjectToUser = `-- name: LinkSubjectToUser :one
-update panel_user set oidc_subject = $2 where email = $1 returning id, email, password_hash, created_at, oidc_subject
+update panel_user set oidc_subject = $2 where email = $1 returning id, email, password_hash, created_at, oidc_subject, system_admin
 `
 
 type LinkSubjectToUserParams struct {
@@ -368,8 +600,71 @@ func (q *Queries) LinkSubjectToUser(ctx context.Context, arg LinkSubjectToUserPa
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.SystemAdmin,
 	)
 	return i, err
+}
+
+const membershipIn = `-- name: MembershipIn :one
+select coalesce(r.name, '') as role
+from membership m
+left join role r on r.id = m.role_id
+where m.user_id = $1 and m.tenant_id = $2
+`
+
+type MembershipInParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) MembershipIn(ctx context.Context, arg MembershipInParams) (string, error) {
+	row := q.db.QueryRow(ctx, membershipIn, arg.UserID, arg.TenantID)
+	var role string
+	err := row.Scan(&role)
+	return role, err
+}
+
+const memberships = `-- name: Memberships :many
+select m.tenant_id, t.slug, t.name as tenant_name, coalesce(r.name, '') as role, m.created_at
+from membership m
+join tenant t on t.id = m.tenant_id
+left join role r on r.id = m.role_id
+where m.user_id = $1
+order by t.slug
+`
+
+type MembershipsRow struct {
+	TenantID   uuid.UUID
+	Slug       string
+	TenantName string
+	Role       string
+	CreatedAt  time.Time
+}
+
+func (q *Queries) Memberships(ctx context.Context, userID uuid.UUID) ([]MembershipsRow, error) {
+	rows, err := q.db.Query(ctx, memberships, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MembershipsRow{}
+	for rows.Next() {
+		var i MembershipsRow
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Slug,
+			&i.TenantName,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const notifyPanel = `-- name: NotifyPanel :exec
@@ -382,26 +677,27 @@ func (q *Queries) NotifyPanel(ctx context.Context) error {
 }
 
 const panelSessionUser = `-- name: PanelSessionUser :one
-select u.id, u.email
+select u.id, u.email, u.system_admin
 from panel_session s
 join panel_user u on u.id = s.user_id
 where s.token = $1 and s.expires_at > now()
 `
 
 type PanelSessionUserRow struct {
-	ID    uuid.UUID
-	Email string
+	ID          uuid.UUID
+	Email       string
+	SystemAdmin bool
 }
 
 func (q *Queries) PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error) {
 	row := q.db.QueryRow(ctx, panelSessionUser, token)
 	var i PanelSessionUserRow
-	err := row.Scan(&i.ID, &i.Email)
+	err := row.Scan(&i.ID, &i.Email, &i.SystemAdmin)
 	return i, err
 }
 
 const panelUserByEmail = `-- name: PanelUserByEmail :one
-select id, email, password_hash, created_at, oidc_subject from panel_user where email = $1
+select id, email, password_hash, created_at, oidc_subject, system_admin from panel_user where email = $1
 `
 
 func (q *Queries) PanelUserByEmail(ctx context.Context, email string) (PanelUser, error) {
@@ -413,12 +709,13 @@ func (q *Queries) PanelUserByEmail(ctx context.Context, email string) (PanelUser
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.SystemAdmin,
 	)
 	return i, err
 }
 
 const panelUserBySubject = `-- name: PanelUserBySubject :one
-select id, email, password_hash, created_at, oidc_subject from panel_user where oidc_subject = $1
+select id, email, password_hash, created_at, oidc_subject, system_admin from panel_user where oidc_subject = $1
 `
 
 func (q *Queries) PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Text) (PanelUser, error) {
@@ -430,39 +727,173 @@ func (q *Queries) PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Tex
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.SystemAdmin,
 	)
 	return i, err
+}
+
+const panelUsers = `-- name: PanelUsers :many
+select u.id, u.email, r.name as role, u.oidc_subject, m.created_at
+from membership m
+join panel_user u on u.id = m.user_id
+left join role r on r.id = m.role_id
+where m.tenant_id = $1
+order by u.email
+`
+
+type PanelUsersRow struct {
+	ID          uuid.UUID
+	Email       string
+	Role        pgtype.Text
+	OidcSubject pgtype.Text
+	CreatedAt   time.Time
+}
+
+func (q *Queries) PanelUsers(ctx context.Context, tenantID uuid.UUID) ([]PanelUsersRow, error) {
+	rows, err := q.db.Query(ctx, panelUsers, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PanelUsersRow{}
+	for rows.Next() {
+		var i PanelUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Role,
+			&i.OidcSubject,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const permissions = `-- name: Permissions :many
+select name, description from permission order by name
+`
+
+type PermissionsRow struct {
+	Name        string
+	Description string
+}
+
+func (q *Queries) Permissions(ctx context.Context) ([]PermissionsRow, error) {
+	rows, err := q.db.Query(ctx, permissions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PermissionsRow{}
+	for rows.Next() {
+		var i PermissionsRow
+		if err := rows.Scan(&i.Name, &i.Description); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const placementsPointedAt = `-- name: PlacementsPointedAt :many
+select p.value, p.tenant_id, coalesce(r.name, '') as role
+from claim_placement p
+left join role r on r.id = p.role_id
+where p.method = $1 and p.value = any($2::varchar[])
+`
+
+type PlacementsPointedAtParams struct {
+	Method  string
+	Column2 []string
+}
+
+type PlacementsPointedAtRow struct {
+	Value    string
+	TenantID uuid.UUID
+	Role     string
+}
+
+func (q *Queries) PlacementsPointedAt(ctx context.Context, arg PlacementsPointedAtParams) ([]PlacementsPointedAtRow, error) {
+	rows, err := q.db.Query(ctx, placementsPointedAt, arg.Method, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PlacementsPointedAtRow{}
+	for rows.Next() {
+		var i PlacementsPointedAtRow
+		if err := rows.Scan(&i.Value, &i.TenantID, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pointValueAt = `-- name: PointValueAt :exec
+insert into claim_placement (method, value, tenant_id, role_id)
+values ($1, $2, $3, $4)
+on conflict (method, value, tenant_id) do update set role_id = excluded.role_id
+`
+
+type PointValueAtParams struct {
+	Method   string
+	Value    string
+	TenantID uuid.UUID
+	RoleID   pgtype.UUID
+}
+
+func (q *Queries) PointValueAt(ctx context.Context, arg PointValueAtParams) error {
+	_, err := q.db.Exec(ctx, pointValueAt,
+		arg.Method,
+		arg.Value,
+		arg.TenantID,
+		arg.RoleID,
+	)
+	return err
 }
 
 const providerAlreadyRoutedTo = `-- name: ProviderAlreadyRoutedTo :one
 select exists (
     select 1 from route r
     join destination d on d.id = r.destination_id
-    where r.provider = $1 and d.url = $2
+    where r.tenant_id = $1 and r.provider = $2 and d.url = $3
 )::boolean as taken
 `
 
 type ProviderAlreadyRoutedToParams struct {
+	TenantID uuid.UUID
 	Provider string
 	Url      string
 }
 
 func (q *Queries) ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlreadyRoutedToParams) (bool, error) {
-	row := q.db.QueryRow(ctx, providerAlreadyRoutedTo, arg.Provider, arg.Url)
+	row := q.db.QueryRow(ctx, providerAlreadyRoutedTo, arg.TenantID, arg.Provider, arg.Url)
 	var taken bool
 	err := row.Scan(&taken)
 	return taken, err
 }
 
 const recordDeliveryAttempt = `-- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (id, delivery_id, attempt, round, status, error, duration_ms)
-select $1, $2, $3, d.replay_count, $4, $5, $6
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5
 from delivery d
-where d.id = $2
+where d.id = $1
 `
 
 type RecordDeliveryAttemptParams struct {
-	ID         uuid.UUID
 	DeliveryID uuid.UUID
 	Attempt    int32
 	Status     pgtype.Int4
@@ -472,13 +903,39 @@ type RecordDeliveryAttemptParams struct {
 
 func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error {
 	_, err := q.db.Exec(ctx, recordDeliveryAttempt,
-		arg.ID,
 		arg.DeliveryID,
 		arg.Attempt,
 		arg.Status,
 		arg.Error,
 		arg.DurationMs,
 	)
+	return err
+}
+
+const registerAuthMethod = `-- name: RegisterAuthMethod :exec
+insert into auth_method (name) values ($1) on conflict (name) do nothing
+`
+
+func (q *Queries) RegisterAuthMethod(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, registerAuthMethod, name)
+	return err
+}
+
+const registerTransport = `-- name: RegisterTransport :exec
+insert into transport (name) values ($1) on conflict (name) do nothing
+`
+
+func (q *Queries) RegisterTransport(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, registerTransport, name)
+	return err
+}
+
+const registerVerifier = `-- name: RegisterVerifier :exec
+insert into verifier (name) values ($1) on conflict (name) do nothing
+`
+
+func (q *Queries) RegisterVerifier(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, registerVerifier, name)
 	return err
 }
 
@@ -495,6 +952,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -504,11 +962,16 @@ where dl.id = $1
   )
 `
 
+type ReplayDeliveryParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
 // A replay only reopens deliveries whose destination is still routed for this
 // event's provider and still enabled. Anything else is history: the routes page
 // is the truth about where events go.
-func (q *Queries) ReplayDelivery(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, replayDelivery, id)
+func (q *Queries) ReplayDelivery(ctx context.Context, arg ReplayDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replayDelivery, arg.ID, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -527,6 +990,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.destination_id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -536,8 +1000,13 @@ where dl.destination_id = $1
   )
 `
 
-func (q *Queries) ReplayDestination(ctx context.Context, destinationID uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, replayDestination, destinationID)
+type ReplayDestinationParams struct {
+	DestinationID uuid.UUID
+	TenantID      uuid.UUID
+}
+
+func (q *Queries) ReplayDestination(ctx context.Context, arg ReplayDestinationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replayDestination, arg.DestinationID, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -556,6 +1025,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.event_id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -565,19 +1035,140 @@ where dl.event_id = $1
   )
 `
 
-func (q *Queries) ReplayEvent(ctx context.Context, eventID uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, replayEvent, eventID)
+type ReplayEventParams struct {
+	EventID  uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) ReplayEvent(ctx context.Context, arg ReplayEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replayEvent, arg.EventID, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
 }
 
+const role = `-- name: Role :one
+select r.name, r.description, r.built_in,
+       coalesce(array_agg(p.name order by p.name)
+                filter (where p.name is not null), '{}')::text[] as grants
+from role r
+left join role_grant g on g.role_id = r.id
+left join permission p on p.id = g.permission_id
+where (r.tenant_id is null or r.tenant_id = $1) and r.name = $2
+group by r.id, r.name, r.description, r.built_in
+`
+
+type RoleParams struct {
+	TenantID pgtype.UUID
+	Name     string
+}
+
+type RoleRow struct {
+	Name        string
+	Description string
+	BuiltIn     bool
+	Grants      []string
+}
+
+func (q *Queries) Role(ctx context.Context, arg RoleParams) (RoleRow, error) {
+	row := q.db.QueryRow(ctx, role, arg.TenantID, arg.Name)
+	var i RoleRow
+	err := row.Scan(
+		&i.Name,
+		&i.Description,
+		&i.BuiltIn,
+		&i.Grants,
+	)
+	return i, err
+}
+
+const roleByID = `-- name: RoleByID :one
+select tenant_id, name from role where id = $1
+`
+
+type RoleByIDRow struct {
+	TenantID pgtype.UUID
+	Name     string
+}
+
+func (q *Queries) RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, error) {
+	row := q.db.QueryRow(ctx, roleByID, id)
+	var i RoleByIDRow
+	err := row.Scan(&i.TenantID, &i.Name)
+	return i, err
+}
+
+const roleIDByName = `-- name: RoleIDByName :one
+select id from role where (tenant_id is null or tenant_id = $1) and name = $2
+`
+
+type RoleIDByNameParams struct {
+	TenantID pgtype.UUID
+	Name     string
+}
+
+func (q *Queries) RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, roleIDByName, arg.TenantID, arg.Name)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const roles = `-- name: Roles :many
+select r.name, r.description, r.built_in,
+       coalesce(array_agg(p.name order by p.name)
+                filter (where p.name is not null), '{}')::text[] as grants
+from role r
+left join role_grant g on g.role_id = r.id
+left join permission p on p.id = g.permission_id
+where r.tenant_id is null or r.tenant_id = $1
+group by r.id, r.name, r.description, r.built_in
+order by r.built_in desc, r.name
+`
+
+type RolesRow struct {
+	Name        string
+	Description string
+	BuiltIn     bool
+	Grants      []string
+}
+
+func (q *Queries) Roles(ctx context.Context, tenantID pgtype.UUID) ([]RolesRow, error) {
+	rows, err := q.db.Query(ctx, roles, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RolesRow{}
+	for rows.Next() {
+		var i RolesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.Description,
+			&i.BuiltIn,
+			&i.Grants,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const routeByID = `-- name: RouteByID :one
 select r.id, r.provider, d.id as destination_id, d.name, d.enabled
 from route r join destination d on d.id = r.destination_id
-where r.id = $1
+where r.id = $1 and r.tenant_id = $2
 `
+
+type RouteByIDParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
 
 type RouteByIDRow struct {
 	ID            uuid.UUID
@@ -587,8 +1178,8 @@ type RouteByIDRow struct {
 	Enabled       bool
 }
 
-func (q *Queries) RouteByID(ctx context.Context, id uuid.UUID) (RouteByIDRow, error) {
-	row := q.db.QueryRow(ctx, routeByID, id)
+func (q *Queries) RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByIDRow, error) {
+	row := q.db.QueryRow(ctx, routeByID, arg.ID, arg.TenantID)
 	var i RouteByIDRow
 	err := row.Scan(
 		&i.ID,
@@ -601,7 +1192,7 @@ func (q *Queries) RouteByID(ctx context.Context, id uuid.UUID) (RouteByIDRow, er
 }
 
 const searchEvents = `-- name: SearchEvents :many
-select e.id, e.provider, e.path, e.received_at, e.body_size,
+select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::bigint as deliveries,
@@ -616,32 +1207,36 @@ select e.id, e.provider, e.path, e.received_at, e.body_size,
        coalesce((select max(d.attempts) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::int as attempts
 from inbound_event e
-where ($1::text is null or e.provider = $1::text)
-  and ($2::timestamptz is null or e.received_at >= $2::timestamptz)
-  and ($3::timestamptz is null or e.received_at <= $3::timestamptz)
+where e.tenant_id = $1
+  and ($2::text is null or e.provider = $2::text)
+  and ($3::timestamptz is null or e.received_at >= $3::timestamptz)
+  and ($4::timestamptz is null or e.received_at <= $4::timestamptz)
+  and ($5::text is null or e.signature = $5::text)
   and (
-       $4::text is null
-       or ($4::text = 'unrouted' and not exists (
+       $6::text is null
+       or ($6::text = 'unrouted' and not exists (
                select 1 from delivery d
                where d.event_id = e.id and routed(e.provider, d.destination_id)))
-       or ($4::text <> 'unrouted' and exists (
+       or ($6::text <> 'unrouted' and exists (
                select 1 from delivery d
                where d.event_id = e.id
-                 and d.state = $4::text
+                 and d.state = $6::text
                  and routed(e.provider, d.destination_id)))
   )
-  and ($5::text is null
-       or e.id::text = $5::text
-       or position($5::text in convert_from(
+  and ($7::text is null
+       or e.id::text = $7::text
+       or position($7::text in convert_from(
               (select r.body from inbound_request r where r.event_id = e.id), 'UTF8')) > 0)
 order by e.received_at desc
-limit $7 offset $6
+limit $9 offset $8
 `
 
 type SearchEventsParams struct {
+	TenantID   uuid.UUID
 	Provider   pgtype.Text
 	Since      pgtype.Timestamptz
 	Until      pgtype.Timestamptz
+	Signature  pgtype.Text
 	State      pgtype.Text
 	Search     pgtype.Text
 	PageOffset int32
@@ -654,6 +1249,7 @@ type SearchEventsRow struct {
 	Path       string
 	ReceivedAt time.Time
 	BodySize   int32
+	Signature  string
 	Planned    bool
 	Deliveries int64
 	Delivered  int64
@@ -668,9 +1264,11 @@ type SearchEventsRow struct {
 // reported apart as history.
 func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error) {
 	rows, err := q.db.Query(ctx, searchEvents,
+		arg.TenantID,
 		arg.Provider,
 		arg.Since,
 		arg.Until,
+		arg.Signature,
 		arg.State,
 		arg.Search,
 		arg.PageOffset,
@@ -689,6 +1287,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.Path,
 			&i.ReceivedAt,
 			&i.BodySize,
+			&i.Signature,
 			&i.Planned,
 			&i.Deliveries,
 			&i.Delivered,
@@ -707,21 +1306,160 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 	return items, nil
 }
 
-const unplanEvent = `-- name: UnplanEvent :exec
-update inbound_event set planned_at = null where id = $1
+const setRole = `-- name: SetRole :one
+insert into role (tenant_id, name, description)
+values ($1, $2, $3)
+on conflict (tenant_id, name) do update set description = excluded.description
+returning id
 `
 
-func (q *Queries) UnplanEvent(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, unplanEvent, id)
+type SetRoleParams struct {
+	TenantID    pgtype.UUID
+	Name        string
+	Description string
+}
+
+func (q *Queries) SetRole(ctx context.Context, arg SetRoleParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, setRole, arg.TenantID, arg.Name, arg.Description)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const setSystemAdmin = `-- name: SetSystemAdmin :execrows
+update panel_user set system_admin = true where id = $1
+`
+
+// Becoming one means leaving the role behind, and with it the tenant the role
+// belonged to; giving it up means being given a role again.
+func (q *Queries) SetSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, setSystemAdmin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSystemAdminByEmail = `-- name: SetSystemAdminByEmail :execrows
+update panel_user set system_admin = true where email = $1
+`
+
+func (q *Queries) SetSystemAdminByEmail(ctx context.Context, email string) (int64, error) {
+	result, err := q.db.Exec(ctx, setSystemAdminByEmail, email)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const stopPointingValue = `-- name: StopPointingValue :exec
+delete from claim_placement where method = $1 and value = $2 and tenant_id = $3
+`
+
+type StopPointingValueParams struct {
+	Method   string
+	Value    string
+	TenantID uuid.UUID
+}
+
+func (q *Queries) StopPointingValue(ctx context.Context, arg StopPointingValueParams) error {
+	_, err := q.db.Exec(ctx, stopPointingValue, arg.Method, arg.Value, arg.TenantID)
+	return err
+}
+
+const systemAdmins = `-- name: SystemAdmins :many
+select id, email, oidc_subject, created_at
+from panel_user
+where system_admin
+order by email
+`
+
+type SystemAdminsRow struct {
+	ID          uuid.UUID
+	Email       string
+	OidcSubject pgtype.Text
+	CreatedAt   time.Time
+}
+
+func (q *Queries) SystemAdmins(ctx context.Context) ([]SystemAdminsRow, error) {
+	rows, err := q.db.Query(ctx, systemAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SystemAdminsRow{}
+	for rows.Next() {
+		var i SystemAdminsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.OidcSubject,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const tenantsNamed = `-- name: TenantsNamed :many
+select id, slug from tenant where slug = any($1::varchar[])
+`
+
+type TenantsNamedRow struct {
+	ID   uuid.UUID
+	Slug string
+}
+
+func (q *Queries) TenantsNamed(ctx context.Context, dollar_1 []string) ([]TenantsNamedRow, error) {
+	rows, err := q.db.Query(ctx, tenantsNamed, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TenantsNamedRow{}
+	for rows.Next() {
+		var i TenantsNamedRow
+		if err := rows.Scan(&i.ID, &i.Slug); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const unplanEvent = `-- name: UnplanEvent :exec
+update inbound_event set planned_at = null where id = $1 and tenant_id = $2
+`
+
+type UnplanEventParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+func (q *Queries) UnplanEvent(ctx context.Context, arg UnplanEventParams) error {
+	_, err := q.db.Exec(ctx, unplanEvent, arg.ID, arg.TenantID)
 	return err
 }
 
 const unplanProvider = `-- name: UnplanProvider :execrows
-update inbound_event set planned_at = null where provider = $1
+update inbound_event set planned_at = null where provider = $1 and tenant_id = $2
 `
 
-func (q *Queries) UnplanProvider(ctx context.Context, provider string) (int64, error) {
-	result, err := q.db.Exec(ctx, unplanProvider, provider)
+type UnplanProviderParams struct {
+	Provider string
+	TenantID uuid.UUID
+}
+
+func (q *Queries) UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unplanProvider, arg.Provider, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -733,7 +1471,11 @@ select e.provider,
        count(*)::bigint    as events,
        max(e.received_at)::timestamptz as last_received
 from inbound_event e
-where not exists (select 1 from route r where r.provider = e.provider)
+where e.tenant_id = $1
+  and not exists (
+      select 1 from route r
+      where r.tenant_id = e.tenant_id and r.provider = e.provider
+  )
 group by e.provider
 order by max(e.received_at) desc
 `
@@ -744,8 +1486,8 @@ type UnroutedProvidersRow struct {
 	LastReceived time.Time
 }
 
-func (q *Queries) UnroutedProviders(ctx context.Context) ([]UnroutedProvidersRow, error) {
-	rows, err := q.db.Query(ctx, unroutedProviders)
+func (q *Queries) UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error) {
+	rows, err := q.db.Query(ctx, unroutedProviders, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -765,16 +1507,74 @@ func (q *Queries) UnroutedProviders(ctx context.Context) ([]UnroutedProvidersRow
 }
 
 const updateDestination = `-- name: UpdateDestination :exec
-update destination set url = $2, enabled = $3 where id = $1
+update destination set url = $2, enabled = $3 where id = $1 and tenant_id = $4
 `
 
 type UpdateDestinationParams struct {
-	ID      uuid.UUID
-	Url     string
-	Enabled bool
+	ID       uuid.UUID
+	Url      string
+	Enabled  bool
+	TenantID uuid.UUID
 }
 
 func (q *Queries) UpdateDestination(ctx context.Context, arg UpdateDestinationParams) error {
-	_, err := q.db.Exec(ctx, updateDestination, arg.ID, arg.Url, arg.Enabled)
+	_, err := q.db.Exec(ctx, updateDestination,
+		arg.ID,
+		arg.Url,
+		arg.Enabled,
+		arg.TenantID,
+	)
 	return err
+}
+
+const updatePanelUserRole = `-- name: UpdatePanelUserRole :execrows
+update membership set role_id = $3 where user_id = $1 and tenant_id = $2
+`
+
+type UpdatePanelUserRoleParams struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+	RoleID   pgtype.UUID
+}
+
+func (q *Queries) UpdatePanelUserRole(ctx context.Context, arg UpdatePanelUserRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePanelUserRole, arg.UserID, arg.TenantID, arg.RoleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const valuesPointedAtTenant = `-- name: ValuesPointedAtTenant :many
+select p.method, p.value, coalesce(r.name, '') as role
+from claim_placement p
+left join role r on r.id = p.role_id
+where p.tenant_id = $1
+order by p.method, p.value
+`
+
+type ValuesPointedAtTenantRow struct {
+	Method string
+	Value  string
+	Role   string
+}
+
+func (q *Queries) ValuesPointedAtTenant(ctx context.Context, tenantID uuid.UUID) ([]ValuesPointedAtTenantRow, error) {
+	rows, err := q.db.Query(ctx, valuesPointedAtTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ValuesPointedAtTenantRow{}
+	for rows.Next() {
+		var i ValuesPointedAtTenantRow
+		if err := rows.Scan(&i.Method, &i.Value, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/provider"
 )
 
 templ eventsPage(events []console.EventSummary, providers []string, filter console.Filter) {
@@ -32,6 +35,16 @@ templ filters(providers []string, filter console.Filter) {
 			<option value="">any state</option>
 			for _, state := range deliveryStates {
 				if state.value == filter.State {
+					<option value={ state.value } selected>{ state.label }</option>
+				} else {
+					<option value={ state.value }>{ state.label }</option>
+				}
+			}
+		</select>
+		<select name="signature">
+			<option value="">any signature</option>
+			for _, state := range signatureStates {
+				if state.value == filter.Signature {
 					<option value={ state.value } selected>{ state.label }</option>
 				} else {
 					<option value={ state.value }>{ state.label }</option>
@@ -66,14 +79,16 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 								hx-get={ "/events/" + event.ID.String() + "/fragment" }
 								hx-target="#detail-body" hx-swap="innerHTML">
 							<td>{ stamp(event.ReceivedAt) }</td>
-							<td>{ event.Provider }</td>
+							<td>{ event.Provider }@signatureBadge(event.Signature)</td>
 							<td>{ fmt.Sprintf("%d B", event.BodySize) }</td>
 							<td>@deliveryCounts(event)</td>
 							<td onclick="event.stopPropagation()">
-								<button hx-post={ "/events/" + event.ID.String() + "/replay?view=list" }
-										hx-target="#events" hx-select="#events" hx-swap="outerHTML"
-										hx-include=".filters"
-										hx-confirm="Replay every delivery of this event?">replay</button>
+								if may(ctx, authz.EventsReplay) {
+									<button hx-post={ "/events/" + event.ID.String() + "/replay?view=list" }
+											hx-target="#events" hx-select="#events" hx-swap="outerHTML"
+											hx-include=".filters"
+											hx-confirm="Replay every delivery of this event?">replay</button>
+								}
 								<a href={ templ.SafeURL("/events/" + event.ID.String()) }><button type="button">open</button></a>
 							</td>
 						</tr>
@@ -103,7 +118,7 @@ templ deliveryCounts(event console.EventSummary) {
 			<span class="dead">{ fmt.Sprintf("%d dead", event.Dead) }</span>
 		}
 		if event.Attempts > 1 {
-			<span class="muted">{ fmt.Sprintf("%d attempts", event.Attempts) }</span>
+			<span class="muted">{ counted(int(event.Attempts), "attempt") }</span>
 		}
 	}
 	if event.Unrouted > 0 {
@@ -137,6 +152,7 @@ templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inMo
 	<section>
 		<table>
 			<tbody>
+				<tr><th>signature</th><td>@signatureBadge(event.Signature) @signatureNote(event.Signature)</td></tr>
 				<tr><th>received</th><td>{ stamp(event.ReceivedAt) }</td></tr>
 				<tr><th>path</th><td>{ event.Path }</td></tr>
 				<tr><th>size</th><td>{ fmt.Sprintf("%d bytes", event.BodySize) }</td></tr>
@@ -154,17 +170,19 @@ templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inMo
 		</table>
 	</section>
 	<section>
-		<h1>Deliveries
-			if inModal {
-				<button hx-post={ "/events/" + event.ID.String() + "/replay?view=fragment" }
-						hx-target="#detail-body" hx-swap="innerHTML"
-						hx-confirm="Replay every delivery of this event?">replay all</button>
-			} else {
-				<button hx-post={ "/events/" + event.ID.String() + "/replay" }
-						hx-target="body" hx-swap="outerHTML"
-						hx-confirm="Replay every delivery of this event?">replay all</button>
+		<h2>Deliveries
+			if may(ctx, authz.EventsReplay) {
+				if inModal {
+					<button hx-post={ "/events/" + event.ID.String() + "/replay?view=fragment" }
+							hx-target="#detail-body" hx-swap="innerHTML"
+							hx-confirm="Replay every delivery of this event?">replay all</button>
+				} else {
+					<button hx-post={ "/events/" + event.ID.String() + "/replay" }
+							hx-target="body" hx-swap="outerHTML"
+							hx-confirm="Replay every delivery of this event?">replay all</button>
+				}
 			}
-		</h1>
+		</h2>
 		if len(deliveries) == 0 {
 			<p class="muted">No delivery has been planned for this event.</p>
 		} else {
@@ -174,15 +192,15 @@ templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inMo
 		}
 	</section>
 	<section>
-		<h1>Headers</h1>
+		<h2>Headers</h2>
 		<pre>{ formatHeaders(event.Headers) }</pre>
 	</section>
 	<section>
-		<h1>
+		<h2>
 			Body
 			<button type="button" onclick="copyBody(this)"
 					title="copies the body exactly as it was received">copy</button>
-		</h1>
+		</h2>
 		if isJSON(event.Body) {
 			<pre class="code">{ prettyJSON(event.Body) }</pre>
 			<details>
@@ -203,14 +221,14 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 					<th>{ delivery.Destination }</th>
 					<td class="wrap">
 						<span class={ delivery.State }>{ delivery.State }</span>
-						<span class="muted">{ fmt.Sprintf(" %d attempts", delivery.Attempts) }</span>
+						<span class="muted">{ " " + counted(int(delivery.Attempts), "attempt") }</span>
 						if delivery.ReplayCount > 0 {
 							<span class="pill">{ fmt.Sprintf("replayed %d×", delivery.ReplayCount) }</span>
 						}
 						if !delivery.Routed {
 							<span class="pill dead">no longer routed</span>
 						}
-						if delivery.Routed {
+						if delivery.Routed && may(ctx, authz.EventsReplay) {
 							if inModal {
 								<button hx-post={ "/events/" + eventID + "/deliveries/" + delivery.ID.String() + "/replay?view=fragment" }
 										hx-target="#detail-body" hx-swap="innerHTML">replay</button>
@@ -232,10 +250,10 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 			<details>
 				<summary class="muted">{ historySummary(delivery) }</summary>
 				for _, round := range delivery.Rounds {
-					<h1 class="muted">
+					<h2>
 						{ round.Title() }
-						<span class="muted">{ fmt.Sprintf("%d attempts", len(round.Attempts)) }</span>
-					</h1>
+						<span class="muted">{ counted(len(round.Attempts), "attempt") }</span>
+					</h2>
 					<div class="scroll attempts">
 						<table>
 							<thead>
@@ -268,6 +286,139 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 	</section>
 }
 
+templ signatureBadge(state string) {
+	switch state {
+		case "valid":
+			<span class="pill delivered">signed</span>
+		case "invalid":
+			<span class="pill dead">forged</span>
+		case "missing":
+			<span class="pill dead">unsigned</span>
+		default:
+			<span class="pill muted">unchecked</span>
+	}
+}
+
+templ signatureNote(state string) {
+	switch state {
+		case "valid":
+			<span class="muted">the signature matched the configured secret</span>
+		case "invalid":
+			<span class="dead">the signature did not match, so this was never delivered</span>
+		case "missing":
+			<span class="dead">no signature was sent, so this was never delivered</span>
+		default:
+			<span class="muted">no verification is configured for this provider</span>
+	}
+}
+
+templ verificationPage(items []console.Verification, providers []string) {
+	<div id="verification">
+		@settingsNav("/verification")
+		<h1>Verification</h1>
+		<p class="muted">
+			A provider with no verification recorded here is accepted as it always was. Once a
+			verifier is configured, a request whose signature does not match is still recorded,
+			marked, and never delivered anywhere.
+		</p>
+		<p class="muted">
+			The secret is never stored: a row names the environment variable that carries it, so
+			a database dump cannot be used to forge a signature.
+		</p>
+		if len(items) == 0 {
+			<p class="muted">No provider is verified.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>provider</th><th>proof</th><th>header</th><th>secret from</th><th>refused</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, item := range items {
+						<tr>
+							<td>{ item.Provider }</td>
+							<td>{ describeProof(item) }</td>
+							<td>
+								if item.Header != "" {
+									{ item.Header }
+								} else {
+									<span class="muted">—</span>
+								}
+							</td>
+							<td>
+								{ item.SecretEnv }
+								if !item.SecretPresent {
+									<span class="pill dead">not set here</span>
+								}
+							</td>
+							<td>
+								if item.Refused > 0 {
+									<span class="dead">{ fmt.Sprintf("%d refused", item.Refused) }</span>
+								} else {
+									<span class="muted">none</span>
+								}
+							</td>
+							<td>
+								if may(ctx, authz.VerificationWrite) {
+									<form hx-post={ "/verification/" + item.Provider + "/recheck" }
+											hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">
+										if item.Refused > 0 {
+											<button hx-confirm="Check the refused requests again with the current secret?">recheck</button>
+										}
+										<button hx-post={ "/verification/" + item.Provider + "/remove" }
+												hx-target="#verification" hx-select="#verification" hx-swap="outerHTML"
+												hx-confirm="Stop checking this provider? Its requests will be accepted unchecked.">remove</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		if may(ctx, authz.VerificationWrite) {
+			<section>
+				<h2>Verify a provider</h2>
+				<form class="filters" hx-post="/verification" hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">
+					<input type="text" name="provider" placeholder="provider" list="seen-providers" required/>
+					<datalist id="seen-providers">
+						for _, name := range providers {
+							<option value={ name }></option>
+						}
+					</datalist>
+					<select name="preset">
+						for _, preset := range provider.Presets() {
+							<option value={ preset.Name } title={ preset.Description }>{ preset.Name }</option>
+						}
+					</select>
+					<input type="text" name="secret-env" placeholder="CHARON_SECRET_STRIPE" size="26" required/>
+					<input type="text" name="header" placeholder="header, to override the preset" size="26"/>
+					<button>verify</button>
+				</form>
+			</section>
+		}
+	</div>
+}
+
+// A preset is only parameters, so the panel describes what was stored rather
+// than the name it was chosen by.
+func describeProof(item console.Verification) string {
+	switch item.Verifier {
+	case provider.SharedToken:
+		return "shared token"
+	case provider.BasicAuth:
+		return "basic auth"
+	default:
+		return fmt.Sprintf("hmac %s %s, %s", item.Algorithm, item.Encoding, item.Scheme)
+	}
+}
+
+var signatureStates = []struct{ value, label string }{
+	{"valid", "signed"},
+	{"invalid", "forged"},
+	{"missing", "unsigned"},
+	{"unchecked", "unchecked"},
+}
+
 var deliveryStates = []struct{ value, label string }{
 	{"delivered", "delivered"},
 	{"pending", "pending"},
@@ -288,12 +439,23 @@ func historySummary(delivery console.Delivery) string {
 	return fmt.Sprintf("attempt history — %d attempts over %d runs", attempts, len(delivery.Rounds))
 }
 
-templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider) {
+templ transportChoice(transports []string) {
+	if len(transports) > 1 {
+		<select name="transport">
+			for _, transport := range transports {
+				<option value={ transport }>{ transport }</option>
+			}
+		</select>
+	}
+}
+
+templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider, transports []string) {
 	<div id="routes">
+		@settingsNav("/routes")
 		<h1>Routes</h1>
 		if len(unrouted) > 0 {
 			<section class="attention">
-				<h1>Received, but going nowhere</h1>
+				<h2>Received, but going nowhere</h2>
 				<p class="muted">
 					These providers have sent events that are recorded and waiting. They have no
 					route, so nothing has been delivered. Give one a destination and every event
@@ -310,13 +472,18 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider)
 								<td>{ fmt.Sprint(provider.Events) }</td>
 								<td>{ stamp(provider.LastReceived) }</td>
 								<td colspan="2">
-									<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-											hx-confirm={ fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider) }>
-										<input type="hidden" name="provider" value={ provider.Provider }/>
-										<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
-										<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
-										<button>create route</button>
-									</form>
+									if may(ctx, authz.RoutesWrite) {
+										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+												hx-confirm={ fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider) }>
+											<input type="hidden" name="provider" value={ provider.Provider }/>
+											<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
+											<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
+											@transportChoice(transports)
+											<button>create route</button>
+										</form>
+									} else {
+										<span class="muted">no route</span>
+									}
 								</td>
 							</tr>
 						}
@@ -325,7 +492,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider)
 			</section>
 		}
 		<section>
-			<h1>Configured</h1>
+			<h2>Configured</h2>
 			<p class="muted">
 				Adding a route, or switching a destination back on, delivers every event already
 				recorded for that provider. Changing where a route points does not: what went to
@@ -336,33 +503,42 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider)
 			} else {
 				<table>
 					<thead>
-						<tr><th>provider</th><th>destination</th><th>url</th><th>deliveries</th><th></th></tr>
+						<tr><th>provider</th><th>destination</th><th>transport</th><th>url</th><th>deliveries</th><th></th></tr>
 					</thead>
 					<tbody>
 						for _, route := range routes {
 							<tr>
 								<td>{ route.Provider }</td>
 								<td>{ route.Destination }</td>
+								<td>{ route.Transport }</td>
 								<td colspan="3">
-									<form hx-post={ "/routes/" + route.ID.String() + "/save" }
-											hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
-										<input type="url" name="url" value={ route.URL } size="44" required/>
-										if route.Enabled {
-											<label><input type="checkbox" name="enabled" value="1" checked/> enabled</label>
-										} else {
-											<label><input type="checkbox" name="enabled" value="1"/> enabled</label>
-										}
-										<button>save</button>
-										<span class="muted">{ fmt.Sprintf("%d deliveries", route.Deliveries) }</span>
-										if route.Deliveries > 0 {
-											<button hx-post={ "/routes/" + route.ID.String() + "/resend" }
+									if may(ctx, authz.RoutesWrite) {
+										<form hx-post={ "/routes/" + route.ID.String() + "/save" }
+												hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
+											<input type="url" name="url" value={ route.URL } size="44" required/>
+											if route.Enabled {
+												<label><input type="checkbox" name="enabled" value="1" checked/> enabled</label>
+											} else {
+												<label><input type="checkbox" name="enabled" value="1"/> enabled</label>
+											}
+											<button>save</button>
+											<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+											if route.Deliveries > 0 && may(ctx, authz.EventsReplay) {
+												<button hx-post={ "/routes/" + route.ID.String() + "/resend" }
+														hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+														hx-confirm={ fmt.Sprintf("Resend all %d deliveries to this destination? Each one will be posted again.", route.Deliveries) }>resend</button>
+											}
+											<button hx-post={ "/routes/" + route.ID.String() + "/delete" }
 													hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-													hx-confirm={ fmt.Sprintf("Resend all %d deliveries to this destination? Each one will be posted again.", route.Deliveries) }>resend</button>
+													hx-confirm="Remove this route? Deliveries already recorded are kept.">remove</button>
+										</form>
+									} else {
+										<span class="muted">{ route.URL }</span>
+										if !route.Enabled {
+											<span class="pill">disabled</span>
 										}
-										<button hx-post={ "/routes/" + route.ID.String() + "/delete" }
-												hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-												hx-confirm="Remove this route? Deliveries already recorded are kept.">remove</button>
-									</form>
+										<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+									}
 								</td>
 							</tr>
 						}
@@ -370,16 +546,19 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider)
 				</table>
 			}
 		</section>
-		<section>
-			<h1>Add a route</h1>
-			<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-					hx-confirm="Every event already recorded for this provider will be delivered to this destination. Continue?">
-				<input type="text" name="provider" placeholder="provider" required/>
-				<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
-				<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
-				<button>create route</button>
-			</form>
-		</section>
+		if may(ctx, authz.RoutesWrite) {
+			<section>
+				<h2>Add a route</h2>
+				<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+						hx-confirm="Every event already recorded for this provider will be delivered to this destination. Continue?">
+					<input type="text" name="provider" placeholder="provider" required/>
+					<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
+					<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
+					@transportChoice(transports)
+					<button>create route</button>
+				</form>
+			</section>
+		}
 	</div>
 }
 
@@ -402,11 +581,31 @@ func prettyJSON(body []byte) string {
 	return out.String()
 }
 
+// counted keeps the plural honest, because "1 attempts" reads like a bug.
+func counted(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	if strings.HasSuffix(noun, "y") {
+		return fmt.Sprintf("%d %sies", n, strings.TrimSuffix(noun, "y"))
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 func stamp(at time.Time) string {
 	if at.IsZero() {
 		return "—"
 	}
 	return at.Local().Format("2006-01-02 15:04:05")
+}
+
+// day is the date alone, for columns where the second something happened is
+// not what anyone is reading.
+func day(at time.Time) string {
+	if at.IsZero() {
+		return "—"
+	}
+	return at.Local().Format("2006-01-02")
 }
 
 func localTime(at time.Time) string {

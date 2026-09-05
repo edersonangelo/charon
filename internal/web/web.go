@@ -2,14 +2,13 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
 	"embed"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,21 +17,58 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
+	"github.com/edersonangelo/charon/internal/auth"
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/delivery"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
+	"github.com/edersonangelo/charon/internal/provider"
 )
 
 //go:embed static
 var assets embed.FS
 
-const sessionCookie = "charon_session"
+const (
+	sessionCookie = "charon_session"
+	// A system administrator acts inside one tenant at a time, and this says
+	// which. Everything is still scoped to a tenant, so nothing has to read
+	// across them.
+	tenantCookie = "charon_tenant"
+)
 
 type Store interface {
 	UserByEmail(ctx context.Context, email string) (console.User, error)
+	VerifyPassword(ctx context.Context, email, password string) (string, error)
 	CreateSession(ctx context.Context, digest []byte, userID uuid.UUID, expires time.Time) error
 	SessionUser(ctx context.Context, digest []byte) (console.User, error)
 	DeleteSession(ctx context.Context, digest []byte) error
-	UserBySubject(ctx context.Context, subject, email string, provision bool) (console.User, error)
+	UserBySubject(
+		ctx context.Context, subject, email string, place console.Placement, provision bool,
+	) (console.User, error)
+	Role(ctx context.Context, name string) (authz.Role, error)
+	Roles(ctx context.Context) ([]authz.Role, error)
+	SetRole(ctx context.Context, role authz.Role) error
+	PointedHere(ctx context.Context) ([]console.Mapping, error)
+	PointValueAt(ctx context.Context, method, value string, place console.Placement) error
+	StopPointingValue(ctx context.Context, method, value string) error
+	DeleteRole(ctx context.Context, name string) error
+	Operators(ctx context.Context) ([]console.Operator, error)
+	SystemAdmins(ctx context.Context) ([]console.Operator, error)
+	SetSystemAdmin(ctx context.Context, id uuid.UUID) error
+	ClearSystemAdmin(ctx context.Context, id uuid.UUID) error
+	CreateUser(ctx context.Context, email, passwordHash string, place console.Placement) error
+	SetOperatorRole(ctx context.Context, id uuid.UUID, role string) error
+	DeleteOperator(ctx context.Context, id uuid.UUID) error
+	Tenants(ctx context.Context) ([]console.Tenant, error)
+	Memberships(ctx context.Context, user uuid.UUID) ([]console.Membership, error)
+	RoleIn(ctx context.Context, user, tenant uuid.UUID) (string, bool, error)
+	Join(ctx context.Context, user uuid.UUID, place console.Placement) error
+	Settle(ctx context.Context, user uuid.UUID, named []console.Placement) error
+	Isolation(ctx context.Context) (postgres.Isolation, error)
+	CreateTenant(ctx context.Context, slug, name string) (console.Tenant, error)
+	DeleteTenant(ctx context.Context, slug string) error
+	Placement(ctx context.Context, method string, claims []string) ([]console.Placement, error)
 	SearchEvents(ctx context.Context, filter console.Filter) ([]console.EventSummary, error)
 	Providers(ctx context.Context) ([]string, error)
 	EventDetail(ctx context.Context, id uuid.UUID) (console.EventDetail, error)
@@ -41,10 +77,14 @@ type Store interface {
 	ReplayDelivery(ctx context.Context, id uuid.UUID) (int64, error)
 	UnroutedProviders(ctx context.Context) ([]console.UnroutedProvider, error)
 	DetailedRoutes(ctx context.Context) ([]console.RouteRow, error)
-	AddRoute(ctx context.Context, provider, destination, url string) error
+	AddRoute(ctx context.Context, provider, destination, url, transport string) error
 	SaveRoute(ctx context.Context, routeID uuid.UUID, url string, enabled bool) error
 	DeleteRoute(ctx context.Context, routeID uuid.UUID) error
 	ReplayDestination(ctx context.Context, routeID uuid.UUID) (int64, error)
+	Verifications(ctx context.Context) ([]console.Verification, error)
+	SetProvider(ctx context.Context, settings postgres.ProviderSettings) error
+	DeleteProvider(ctx context.Context, name string) error
+	Recheck(ctx context.Context, name string, batch int32) (int, error)
 	DeliveryStates(ctx context.Context) (map[string]int64, error)
 	EventsAwaitingRoute(ctx context.Context) (int64, error)
 	PanelChanges(ctx context.Context) <-chan struct{}
@@ -58,17 +98,20 @@ type Summary struct {
 }
 
 type Config struct {
+	Transports   *delivery.Transports
+	Auth         *auth.Registry
+	Policy       auth.Policy
 	SessionTTL   time.Duration
 	SecureCookie bool
-	OIDC         OIDC
 	Logger       *slog.Logger
 }
 
 type Handler struct {
-	store  Store
-	cfg    Config
-	oidc   *provider
-	logger *slog.Logger
+	store      Store
+	cfg        Config
+	auth       *auth.Registry
+	transports *delivery.Transports
+	logger     *slog.Logger
 }
 
 func New(store Store, cfg Config) *Handler {
@@ -78,38 +121,85 @@ func New(store Store, cfg Config) *Handler {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{store: store, cfg: cfg, oidc: &provider{cfg: cfg.OIDC}, logger: cfg.Logger}
+	if cfg.Transports == nil {
+		cfg.Transports = delivery.DefaultTransports()
+	}
+	if cfg.Auth == nil {
+		cfg.Auth = auth.NewRegistry()
+	}
+	return &Handler{
+		store:      store,
+		cfg:        cfg,
+		auth:       cfg.Auth,
+		transports: cfg.Transports,
+		logger:     cfg.Logger,
+	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 
 	mux.HandleFunc("GET /login", h.loginForm)
-	mux.HandleFunc("POST /login", h.login)
 	mux.HandleFunc("POST /logout", h.logout)
 
-	if h.cfg.OIDC.Configured() {
-		mux.HandleFunc("GET /auth/sso", h.startSSO)
-		mux.HandleFunc("GET /auth/sso/callback", h.callbackSSO)
-	}
+	// One shape of route for every method, so registering one is registration
+	// and nothing else.
+	mux.HandleFunc("POST /auth/{method}", h.signIn)
+	mux.HandleFunc("GET /auth/{method}/start", h.startSignIn)
+	mux.HandleFunc("GET /auth/{method}/callback", h.signIn)
 
-	mux.Handle("GET /{$}", h.authenticated(h.index))
-	mux.Handle("GET /events", h.authenticated(h.events))
-	mux.Handle("GET /events/{id}", h.authenticated(h.event))
-	mux.Handle("GET /events/{id}/fragment", h.authenticated(h.eventFragment))
-	mux.Handle("POST /events/{id}/replay", h.authenticated(h.replayEvent))
-	mux.Handle("POST /events/{eventID}/deliveries/{id}/replay", h.authenticated(h.replayDelivery))
-	mux.Handle("GET /routes", h.authenticated(h.routes))
-	mux.Handle("POST /routes", h.authenticated(h.createRoute))
-	mux.Handle("POST /routes/{id}/save", h.authenticated(h.saveRoute))
-	mux.Handle("POST /routes/{id}/delete", h.authenticated(h.deleteRoute))
-	mux.Handle("POST /routes/{id}/resend", h.authenticated(h.resendRoute))
-	mux.Handle("GET /stream", h.authenticated(h.stream))
+	// Every panel route declares what it needs, so adding one without saying
+	// who may reach it does not compile.
+	mux.Handle("GET /{$}", h.allowed(authz.EventsRead, h.index))
+	mux.Handle("GET /events", h.allowed(authz.EventsRead, h.events))
+	mux.Handle("GET /events/{id}", h.allowed(authz.EventsRead, h.event))
+	mux.Handle("GET /events/{id}/fragment", h.allowed(authz.EventsRead, h.eventFragment))
+	mux.Handle("POST /events/{id}/replay", h.allowed(authz.EventsReplay, h.replayEvent))
+	mux.Handle("POST /events/{eventID}/deliveries/{id}/replay",
+		h.allowed(authz.EventsReplay, h.replayDelivery))
+	mux.Handle("GET /settings", h.allowed(authz.EventsRead, h.settings))
+	mux.Handle("POST /acting-tenant", h.allowed(authz.EventsRead, h.switchTenant))
+	mux.Handle("POST /operators/system", h.allowed(authz.OperatorsWrite, h.makeSystemAdmin))
+	mux.Handle("POST /operators/{id}/system", h.allowed(authz.OperatorsWrite, h.setSystemAdmin))
+	mux.Handle("GET /routes", h.allowed(authz.RoutesRead, h.routes))
+	mux.Handle("POST /routes", h.allowed(authz.RoutesWrite, h.createRoute))
+	mux.Handle("POST /routes/{id}/save", h.allowed(authz.RoutesWrite, h.saveRoute))
+	mux.Handle("POST /routes/{id}/delete", h.allowed(authz.RoutesWrite, h.deleteRoute))
+	mux.Handle("POST /routes/{id}/resend", h.allowed(authz.EventsReplay, h.resendRoute))
+	mux.Handle("GET /verification", h.allowed(authz.VerificationRead, h.verification))
+	mux.Handle("POST /verification", h.allowed(authz.VerificationWrite, h.setVerification))
+	mux.Handle("POST /verification/{name}/remove",
+		h.allowed(authz.VerificationWrite, h.removeVerification))
+	mux.Handle("POST /verification/{name}/recheck",
+		h.allowed(authz.VerificationWrite, h.recheckVerification))
+	mux.Handle("GET /operators", h.allowed(authz.OperatorsRead, h.operators))
+	mux.Handle("POST /operators", h.allowed(authz.OperatorsWrite, h.createOperator))
+	mux.Handle("POST /operators/{id}/role", h.allowed(authz.OperatorsWrite, h.setOperatorRole))
+	mux.Handle("POST /operators/{id}/delete", h.allowed(authz.OperatorsWrite, h.deleteOperator))
+	mux.Handle("GET /roles", h.allowed(authz.OperatorsRead, h.roles))
+	mux.Handle("POST /roles", h.allowed(authz.RolesWrite, h.saveRole))
+	mux.Handle("POST /roles/{name}/delete", h.allowed(authz.RolesWrite, h.deleteRole))
+	mux.Handle("POST /values", h.allowed(authz.RolesWrite, h.pointValue))
+	mux.Handle("POST /values/{method}/{value}/delete",
+		h.allowed(authz.RolesWrite, h.stopPointingValue))
+	mux.Handle("GET /tenants", h.allowed(authz.TenantsWrite, h.tenants))
+	mux.Handle("POST /tenants", h.allowed(authz.TenantsWrite, h.createTenant))
+	mux.Handle("POST /tenants/{slug}/delete", h.allowed(authz.TenantsWrite, h.deleteTenant))
+	mux.Handle("GET /stream", h.allowed(authz.EventsRead, h.stream))
 }
 
-type userKey struct{}
+type (
+	userKey  struct{}
+	grantKey struct{}
+	pathKey  struct{}
+)
 
-func (h *Handler) authenticated(next func(http.ResponseWriter, *http.Request)) http.Handler {
+// allowed resolves the session, confines everything the request does to that
+// operator's tenant, and refuses when their role does not grant what the route
+// needs.
+func (h *Handler) allowed(
+	needs authz.Permission, next func(http.ResponseWriter, *http.Request),
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookie)
 		if err != nil {
@@ -130,7 +220,36 @@ func (h *Handler) authenticated(next func(http.ResponseWriter, *http.Request)) h
 			return
 		}
 
-		next(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
+		acting, ok := h.acting(r, user)
+		if !ok {
+			h.logger.WarnContext(r.Context(), "the operator belongs to no tenant",
+				"email", user.Email)
+			http.Error(w, "you do not belong to any tenant yet", http.StatusForbidden)
+			return
+		}
+
+		ctx := authz.WithTenant(r.Context(), acting.Current)
+
+		role, err := h.roleFor(ctx, user, acting.Current)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "could not read the role of an operator",
+				"email", user.Email, "error", err)
+			http.Error(w, "could not decide this request", http.StatusInternalServerError)
+			return
+		}
+
+		if err := role.Authorize(needs); err != nil {
+			h.logger.WarnContext(ctx, "an operator was refused",
+				"email", user.Email, "role", role.Name, "needs", needs)
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+
+		ctx = context.WithValue(ctx, userKey{}, user)
+		ctx = context.WithValue(ctx, grantKey{}, role)
+		ctx = context.WithValue(ctx, pathKey{}, r.URL.Path)
+		ctx = context.WithValue(ctx, actingKey{}, acting)
+		next(w, r.WithContext(ctx))
 	})
 }
 
@@ -140,39 +259,153 @@ func currentUser(r *http.Request) console.User {
 }
 
 func (h *Handler) loginForm(w http.ResponseWriter, r *http.Request) {
-	notice := ""
-	switch r.URL.Query().Get("sso") {
-	case "rejected":
-		notice = "single sign-on refused that account"
-	case "unavailable":
-		notice = "the identity provider could not be reached"
-	}
-	h.render(w, r, loginPage(
-		r.URL.Query().Get("failed") != "", h.cfg.OIDC.Configured(), notice))
+	h.render(w, r, loginPage(h.auth.Methods(), r.URL.Query().Get("refused") != ""))
 }
 
-func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/login?failed=1", http.StatusSeeOther)
+// One path for every way of signing in: a method says who this is, one policy
+// says whether they are let in, and one place opens the session.
+func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
+	method, found := h.auth.Method(r.PathValue("method"))
+	if !found {
+		http.NotFound(w, r)
 		return
 	}
 
-	email := strings.TrimSpace(r.PostForm.Get("email"))
-	user, err := h.store.UserByEmail(r.Context(), email)
+	identity, err := method.Identify(r.Context(), r)
+	h.finishSignIn(w, r, method, identity, err)
+}
+
+func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request) {
+	method, found := h.auth.Method(r.PathValue("method"))
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+
+	redirector, sendsAway := method.(auth.Redirector)
+	if !sendsAway {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := redirector.Start(w, r); err != nil {
+		h.logger.ErrorContext(r.Context(), "could not begin signing in",
+			"method", method.Name(), "error", err)
+		h.refuse(w, r)
+	}
+}
+
+func (h *Handler) finishSignIn(
+	w http.ResponseWriter, r *http.Request, method auth.Method, identity auth.Identity, err error,
+) {
+	if closer, has := method.(interface{ Done(http.ResponseWriter) }); has {
+		closer.Done(w)
+	}
+
 	if err == nil {
-		err = console.CheckPassword(user.PasswordHash, r.PostForm.Get("password"))
+		// What the provider actually said, which is the first thing anyone
+		// wants when somebody lands somewhere unexpected.
+		h.logger.DebugContext(r.Context(), "an identity arrived",
+			"method", method.Name(), "email", identity.Email,
+			"groups", identity.Claims, "address_unverified", identity.EmailUnverified)
+
+		err = h.cfg.Policy.Admits(identity)
 	}
 	if err != nil {
-		h.logger.WarnContext(r.Context(), "failed sign in", "email", email)
-		http.Redirect(w, r, "/login?failed=1", http.StatusSeeOther)
+		h.logger.WarnContext(r.Context(), "refused a sign-in",
+			"method", method.Name(), "email", identity.Email, "reason", err)
+		h.refuse(w, r)
 		return
 	}
 
-	if err := h.grantSession(w, r, user.ID); err != nil {
+	operator, err := h.operatorFor(r.Context(), method, identity)
+	if err != nil {
+		h.logger.WarnContext(r.Context(), "no operator for the identity",
+			"method", method.Name(), "email", identity.Email, "reason", err)
+		h.refuse(w, r)
+		return
+	}
+
+	if err := h.grantSession(w, r, operator.ID); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+
+	h.logger.InfoContext(r.Context(), "signed in",
+		"method", method.Name(), "email", operator.Email)
 	http.Redirect(w, r, "/events", http.StatusSeeOther)
+}
+
+// An identity with a subject is linked to an account; one without, such as a
+// password, only ever matches an account that already exists.
+func (h *Handler) operatorFor(
+	ctx context.Context, method auth.Method, identity auth.Identity,
+) (console.User, error) {
+	if identity.Subject == "" {
+		return h.store.UserByEmail(ctx, identity.Email)
+	}
+
+	// Where somebody belongs is what the values they carry name: a value that
+	// is the name of a tenant puts them in it. Nothing is registered par by
+	// par, so nothing can be forgotten.
+	named, err := h.store.Placement(ctx, method.Name(), identity.Claims)
+	if err != nil {
+		return console.User{}, err
+	}
+
+	if len(named) == 0 {
+		h.logger.InfoContext(ctx, "nothing this identity carries names a tenant",
+			"method", method.Name(), "email", identity.Email,
+			"carried", carried(identity.Claims))
+	}
+
+	// An account is only made where something says it belongs. Carrying
+	// nothing that names a tenant is not the same as belonging nowhere: a
+	// provider that sends no values, or sends them somewhere this deployment
+	// is not looking, looks exactly like a person with none. An account that
+	// already exists is a different matter — it is linked, not created.
+	// Only where, not as what: the role is applied just below, where a name
+	// the provider uses and nothing here knows leaves the least instead of
+	// turning somebody away.
+	var first console.Placement
+	if len(named) > 0 {
+		first = console.Placement{Tenant: named[0].Tenant}
+	}
+
+	operator, err := h.store.UserBySubject(
+		ctx, identity.Subject, identity.Email, first,
+		len(named) > 0 && h.cfg.Policy.AutoProvision)
+	if err != nil {
+		return console.User{}, err
+	}
+
+	// The token is the truth about where somebody belongs, so it is applied
+	// whole at every sign-in: the tenants it names, and no others. A system
+	// account belongs nowhere by design and is left alone.
+	if !operator.SystemAdmin {
+		if err := h.store.Settle(ctx, operator.ID, named); err != nil {
+			return console.User{}, err
+		}
+		if len(named) == 0 {
+			return console.User{}, fmt.Errorf(
+				"%w: nothing this identity carries names a tenant here (%s)",
+				auth.ErrRefused, carried(identity.Claims))
+		}
+	}
+	return operator, nil
+}
+
+// carried says what arrived, so a refusal names what the provider sent rather
+// than only what it did not.
+func carried(values []string) string {
+	if len(values) == 0 {
+		return "nothing arrived"
+	}
+	return strings.Join(values, ", ")
+}
+
+func (h *Handler) refuse(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/login?refused=1", http.StatusSeeOther)
 }
 
 func (h *Handler) grantSession(w http.ResponseWriter, r *http.Request, userID uuid.UUID) error {
@@ -197,24 +430,6 @@ func (h *Handler) grantSession(w http.ResponseWriter, r *http.Request, userID uu
 		SameSite: http.SameSiteLaxMode,
 	})
 	return nil
-}
-
-func randomString() (string, error) {
-	raw := make([]byte, 24)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generating a random value: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-func encode(payload []byte) string { return base64.RawURLEncoding.EncodeToString(payload) }
-
-func decode(value string) ([]byte, error) {
-	payload, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("decoding: %w", err)
-	}
-	return payload, nil
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +582,7 @@ func (h *Handler) routes(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.page(w, r, "Routes", routesPage(routes, unrouted))
+	h.page(w, r, "Routes", routesPage(routes, unrouted, h.transports.Kinds()))
 }
 
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +603,16 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		destination = provider
 	}
 
-	if err := h.store.AddRoute(r.Context(), provider, destination, target); err != nil {
+	transport := strings.TrimSpace(r.PostForm.Get("transport"))
+	if transport == "" {
+		transport = outbound.HTTP
+	}
+	if !h.transports.Knows(transport) {
+		http.Error(w, "no transport is registered for "+transport, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.AddRoute(r.Context(), provider, destination, target, transport); err != nil {
 		if errors.Is(err, postgres.ErrAlreadyRouted) {
 			http.Error(w, provider+" already delivers to that url", http.StatusConflict)
 			return
@@ -397,7 +621,8 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.InfoContext(r.Context(), "created a route",
-		"provider", provider, "destination", destination, "url", target, "by", currentUser(r).Email)
+		"provider", provider, "destination", destination, "transport", transport,
+		"url", target, "by", currentUser(r).Email)
 
 	h.routes(w, r)
 }
@@ -464,6 +689,94 @@ func (h *Handler) resendRoute(w http.ResponseWriter, r *http.Request) {
 
 	h.routes(w, r)
 }
+
+func (h *Handler) verification(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.Verifications(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	providers, err := h.store.Providers(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.page(w, r, "Verification", verificationPage(items, providers))
+}
+
+func (h *Handler) setVerification(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	name := strings.TrimSpace(r.PostForm.Get("provider"))
+	secretEnv := strings.TrimSpace(r.PostForm.Get("secret-env"))
+	presetName := strings.TrimSpace(r.PostForm.Get("preset"))
+
+	preset, found := provider.PresetByName(presetName)
+	if name == "" || secretEnv == "" || !found {
+		http.Error(w, "a provider, a preset and the name of a secret variable are required",
+			http.StatusBadRequest)
+		return
+	}
+
+	settings := preset.Settings
+	if header := strings.TrimSpace(r.PostForm.Get("header")); header != "" {
+		settings.Header = header
+	}
+
+	if err := h.store.SetProvider(r.Context(), postgres.ProviderSettings{
+		Name:      name,
+		SecretEnv: secretEnv,
+		Settings:  settings,
+	}); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "configured verification",
+		"provider", name, "preset", presetName, "verifier", settings.Verifier,
+		"secret_env", secretEnv, "by", currentUser(r).Email)
+
+	h.verification(w, r)
+}
+
+func (h *Handler) removeVerification(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := h.store.DeleteProvider(r.Context(), name); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "stopped verifying a provider",
+		"provider", name, "by", currentUser(r).Email)
+
+	h.verification(w, r)
+}
+
+func (h *Handler) recheckVerification(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	recovered, err := h.store.Recheck(r.Context(), name, recheckBatch)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "rechecked refused requests",
+		"provider", name, "recovered", recovered, "by", currentUser(r).Email)
+
+	h.verification(w, r)
+}
+
+const recheckBatch = 500
 
 func destinationURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -604,12 +917,13 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 
 func parseFilter(query url.Values) console.Filter {
 	filter := console.Filter{
-		Provider: strings.TrimSpace(query.Get("provider")),
-		State:    strings.TrimSpace(query.Get("state")),
-		Search:   strings.TrimSpace(query.Get("q")),
-		Since:    parseTime(query.Get("since")),
-		Until:    parseTime(query.Get("until")),
-		PageSize: 50,
+		Provider:  strings.TrimSpace(query.Get("provider")),
+		State:     strings.TrimSpace(query.Get("state")),
+		Search:    strings.TrimSpace(query.Get("q")),
+		Signature: strings.TrimSpace(query.Get("signature")),
+		Since:     parseTime(query.Get("since")),
+		Until:     parseTime(query.Get("until")),
+		PageSize:  50,
 	}
 	if page, err := strconv.Atoi(query.Get("page")); err == nil && page > 0 {
 		filter.Page = page
@@ -619,12 +933,24 @@ func parseFilter(query url.Values) console.Filter {
 	if !validState(filter.State) {
 		filter.State = ""
 	}
+	if !validSignature(filter.Signature) {
+		filter.Signature = ""
+	}
 	return filter
 }
 
 func validState(state string) bool {
 	switch state {
 	case "", "pending", "delivered", "dead", "unrouted":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSignature(state string) bool {
+	switch state {
+	case "", "unchecked", "valid", "invalid", "missing":
 		return true
 	default:
 		return false
@@ -649,6 +975,9 @@ func pageLink(filter console.Filter, page int) string {
 	}
 	if filter.State != "" {
 		query.Set("state", filter.State)
+	}
+	if filter.Signature != "" {
+		query.Set("signature", filter.Signature)
 	}
 	if filter.Search != "" {
 		query.Set("q", filter.Search)
@@ -677,4 +1006,153 @@ func formatHeaders(headers map[string][]string) string {
 		}
 	}
 	return out.String()
+}
+
+// may is what the templates ask before drawing a control, so an operator is
+// never shown an action their role would refuse.
+func may(ctx context.Context, needs authz.Permission) bool {
+	role, _ := ctx.Value(grantKey{}).(authz.Role)
+	return role.Allows(needs)
+}
+
+// inTenant is the tenant this request is acting for, which is what anything
+// written by it belongs to.
+func inTenant(r *http.Request) uuid.UUID {
+	tenant, _ := authz.TenantFrom(r.Context())
+	return tenant
+}
+
+// acting is which tenant the request runs in and which ones it could run in.
+// Somebody belongs to the tenants they are a member of; a system administrator
+// belongs to none and reaches all of them. Either way it is one at a time, and
+// the cookie only chooses among what is already theirs.
+func (h *Handler) acting(r *http.Request, user console.User) (Acting, bool) {
+	reachable := h.reachable(r, user)
+	if len(reachable) == 0 {
+		return Acting{}, false
+	}
+
+	// Listed by name for the eye, but the one to start in is where they have
+	// been longest, not whichever name sorts first.
+	current := slices.MinFunc(reachable, func(a, b console.Membership) int {
+		return a.Since.Compare(b.Since)
+	})
+	if cookie, err := r.Cookie(tenantCookie); err == nil {
+		for _, tenant := range reachable {
+			if tenant.Slug == cookie.Value {
+				current = tenant
+			}
+		}
+	}
+
+	return Acting{
+		System:  user.SystemAdmin,
+		Current: current.Tenant,
+		Tenants: reachable,
+	}, true
+}
+
+func (h *Handler) reachable(r *http.Request, user console.User) []console.Membership {
+	if user.SystemAdmin {
+		tenants, err := h.store.Tenants(r.Context())
+		if err != nil {
+			h.logger.WarnContext(r.Context(), "could not read the tenants", "error", err)
+			return nil
+		}
+
+		all := make([]console.Membership, 0, len(tenants))
+		for _, tenant := range tenants {
+			all = append(all, console.Membership{
+				Tenant: tenant.ID, Slug: tenant.Slug, Name: tenant.Name,
+			})
+		}
+		return all
+	}
+
+	held, err := h.store.Memberships(r.Context(), user.ID)
+	if err != nil {
+		h.logger.WarnContext(r.Context(), "could not read what the operator belongs to",
+			"email", user.Email, "error", err)
+		return nil
+	}
+	return held
+}
+
+// roleFor is what somebody may do inside the tenant they are acting in. A
+// system administrator may do everything the code checks; a member holds the
+// role their membership states, and holding none is holding the least.
+func (h *Handler) roleFor(
+	ctx context.Context, user console.User, tenant uuid.UUID,
+) (authz.Role, error) {
+	if user.SystemAdmin {
+		return authz.Everything(), nil
+	}
+
+	name, member, err := h.store.RoleIn(ctx, user.ID, tenant)
+	if err != nil {
+		return authz.Role{}, err
+	}
+	if !member {
+		return authz.Role{}, nil
+	}
+	if name == "" {
+		name = authz.Least
+	}
+	return h.store.Role(ctx, name)
+}
+
+// inSettings lights the settings entry from any page under it, because they
+// are one place as far as the menu is concerned.
+func inSettings(ctx context.Context) string {
+	at, _ := ctx.Value(pathKey{}).(string)
+	if at == "/settings" {
+		return "at"
+	}
+	for _, one := range areas() {
+		if at == one.Path || strings.HasPrefix(at, one.Path+"/") {
+			return "at"
+		}
+	}
+	return "muted"
+}
+
+// here marks the page being looked at, so the menu says where you are.
+func here(ctx context.Context, path string) string {
+	at, _ := ctx.Value(pathKey{}).(string)
+	if at == path || strings.HasPrefix(at, path+"/") {
+		return "at"
+	}
+	return "muted"
+}
+
+// Acting is what the header shows about who is looking: their role, and, for
+// somebody not confined to a tenant, which one they are inside right now.
+type Acting struct {
+	System  bool
+	Current uuid.UUID
+	Tenants []console.Membership
+}
+
+type actingKey struct{}
+
+func acting(ctx context.Context) Acting {
+	state, _ := ctx.Value(actingKey{}).(Acting)
+	return state
+}
+
+// tenantSlug is the tenant being looked at, named the way the provider would
+// have to name it for the convention to take.
+func tenantSlug(ctx context.Context) string {
+	state := acting(ctx)
+	for _, one := range state.Tenants {
+		if one.Tenant == state.Current {
+			return one.Slug
+		}
+	}
+	return "tenant"
+}
+
+func roleName(ctx context.Context) string {
+	role, _ := ctx.Value(grantKey{}).(authz.Role)
+	return role.Name
 }

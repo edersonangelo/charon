@@ -1,6 +1,17 @@
--- name: CreatePanelUser :exec
-insert into panel_user (id, email, password_hash)
-values ($1, $2, $3);
+-- name: CreatePanelUser :one
+insert into panel_user (email, password_hash)
+values ($1, $2)
+returning id;
+
+-- name: CreateSystemAdmin :exec
+insert into panel_user (email, password_hash, system_admin)
+values ($1, $2, true);
+
+-- name: SystemAdmins :many
+select id, email, oidc_subject, created_at
+from panel_user
+where system_admin
+order by email;
 
 -- name: PanelUserByEmail :one
 select * from panel_user where email = $1;
@@ -13,7 +24,7 @@ insert into panel_session (token, user_id, expires_at)
 values ($1, $2, $3);
 
 -- name: PanelSessionUser :one
-select u.id, u.email
+select u.id, u.email, u.system_admin
 from panel_session s
 join panel_user u on u.id = s.user_id
 where s.token = $1 and s.expires_at > now();
@@ -25,22 +36,22 @@ delete from panel_session where token = $1;
 delete from panel_session where expires_at <= now();
 
 -- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (id, delivery_id, attempt, round, status, error, duration_ms)
-select $1, $2, $3, d.replay_count, $4, $5, $6
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5
 from delivery d
-where d.id = $2;
+where d.id = $1;
 
 -- name: DeliveryAttempts :many
 select round, attempt, attempted_at, status, error, duration_ms
 from delivery_attempt
-where delivery_id = $1
+where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc;
 
 -- The state counts only take deliveries whose destination is still routed and
 -- enabled, so the numbers reconcile with the routes page. What is left over is
 -- reported apart as history.
 -- name: SearchEvents :many
-select e.id, e.provider, e.path, e.received_at, e.body_size,
+select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::bigint as deliveries,
@@ -55,9 +66,11 @@ select e.id, e.provider, e.path, e.received_at, e.body_size,
        coalesce((select max(d.attempts) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::int as attempts
 from inbound_event e
-where (sqlc.narg(provider)::text is null or e.provider = sqlc.narg(provider)::text)
+where e.tenant_id = sqlc.arg(tenant_id)
+  and (sqlc.narg(provider)::text is null or e.provider = sqlc.narg(provider)::text)
   and (sqlc.narg(since)::timestamptz is null or e.received_at >= sqlc.narg(since)::timestamptz)
   and (sqlc.narg(until)::timestamptz is null or e.received_at <= sqlc.narg(until)::timestamptz)
+  and (sqlc.narg(signature)::text is null or e.signature = sqlc.narg(signature)::text)
   and (
        sqlc.narg(state)::text is null
        or (sqlc.narg(state)::text = 'unrouted' and not exists (
@@ -77,14 +90,14 @@ order by e.received_at desc
 limit sqlc.arg(page_size) offset sqlc.arg(page_offset);
 
 -- name: DistinctProviders :many
-select distinct provider from inbound_event order by provider;
+select distinct provider from inbound_event where tenant_id = $1 order by provider;
 
 -- name: EventDetail :one
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.planned_at,
-       r.headers, r.body
+       e.signature, r.headers, r.body
 from inbound_event e
 join inbound_request r on r.event_id = e.id
-where e.id = $1;
+where e.id = $1 and e.tenant_id = $2;
 
 -- name: EventDeliveries :many
 select d.id, dest.name as destination, dest.url, d.state, d.attempts,
@@ -99,7 +112,7 @@ select d.id, dest.name as destination, dest.url, d.state, d.attempts,
        )::boolean as routed
 from delivery d
 join destination dest on dest.id = d.destination_id
-where d.event_id = $1
+where d.event_id = $1 and d.tenant_id = $2
 order by dest.name;
 
 -- A replay only reopens deliveries whose destination is still routed for this
@@ -118,6 +131,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -138,6 +152,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.event_id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -147,17 +162,17 @@ where dl.event_id = $1
   );
 
 -- name: UnplanEvent :exec
-update inbound_event set planned_at = null where id = $1;
+update inbound_event set planned_at = null where id = $1 and tenant_id = $2;
 
 -- name: DeliveryStateTotals :many
-select state, count(*) as total from delivery group by state;
+select state, count(*) as total from delivery where tenant_id = $1 group by state;
 
 -- name: PanelUserBySubject :one
 select * from panel_user where oidc_subject = $1;
 
 -- name: CreateSSOUser :one
-insert into panel_user (id, email, oidc_subject)
-values ($1, $2, $3)
+insert into panel_user (email, oidc_subject)
+values ($1, $2)
 returning *;
 
 -- name: LinkSubjectToUser :one
@@ -171,27 +186,32 @@ select e.provider,
        count(*)::bigint    as events,
        max(e.received_at)::timestamptz as last_received
 from inbound_event e
-where not exists (select 1 from route r where r.provider = e.provider)
+where e.tenant_id = $1
+  and not exists (
+      select 1 from route r
+      where r.tenant_id = e.tenant_id and r.provider = e.provider
+  )
 group by e.provider
 order by max(e.received_at) desc;
 
 -- name: DetailedRoutes :many
-select r.id, r.provider, d.id as destination_id, d.name, d.url, d.enabled,
+select r.id, r.provider, d.id as destination_id, d.name, d.url, d.transport, d.enabled,
        (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries
 from route r
 join destination d on d.id = r.destination_id
+where r.tenant_id = $1
 order by r.provider, d.name;
 
 -- name: UpdateDestination :exec
-update destination set url = $2, enabled = $3 where id = $1;
+update destination set url = $2, enabled = $3 where id = $1 and tenant_id = $4;
 
 -- name: DeleteRoute :exec
-delete from route where id = $1;
+delete from route where id = $1 and tenant_id = $2;
 
 -- name: RouteByID :one
 select r.id, r.provider, d.id as destination_id, d.name, d.enabled
 from route r join destination d on d.id = r.destination_id
-where r.id = $1;
+where r.id = $1 and r.tenant_id = $2;
 
 -- name: ReplayDestination :execrows
 update delivery as dl
@@ -205,6 +225,7 @@ set state = 'pending',
     replay_count = replay_count + 1,
     replayed_at = now()
 where dl.destination_id = $1
+  and dl.tenant_id = $2
   and exists (
       select 1
       from inbound_event e
@@ -214,11 +235,166 @@ where dl.destination_id = $1
   );
 
 -- name: UnplanProvider :execrows
-update inbound_event set planned_at = null where provider = $1;
+update inbound_event set planned_at = null where provider = $1 and tenant_id = $2;
 
 -- name: ProviderAlreadyRoutedTo :one
 select exists (
     select 1 from route r
     join destination d on d.id = r.destination_id
-    where r.provider = $1 and d.url = $2
+    where r.tenant_id = $1 and r.provider = $2 and d.url = $3
 )::boolean as taken;
+
+-- name: CountTenants :one
+select count(*) from tenant;
+
+-- name: Roles :many
+select r.name, r.description, r.built_in,
+       coalesce(array_agg(p.name order by p.name)
+                filter (where p.name is not null), '{}')::text[] as grants
+from role r
+left join role_grant g on g.role_id = r.id
+left join permission p on p.id = g.permission_id
+where r.tenant_id is null or r.tenant_id = $1
+group by r.id, r.name, r.description, r.built_in
+order by r.built_in desc, r.name;
+
+-- name: Role :one
+select r.name, r.description, r.built_in,
+       coalesce(array_agg(p.name order by p.name)
+                filter (where p.name is not null), '{}')::text[] as grants
+from role r
+left join role_grant g on g.role_id = r.id
+left join permission p on p.id = g.permission_id
+where (r.tenant_id is null or r.tenant_id = $1) and r.name = $2
+group by r.id, r.name, r.description, r.built_in;
+
+-- name: SetRole :one
+insert into role (tenant_id, name, description)
+values ($1, $2, $3)
+on conflict (tenant_id, name) do update set description = excluded.description
+returning id;
+
+-- name: ClearRoleGrants :exec
+delete from role_grant where role_id = $1;
+
+-- name: GrantPermission :exec
+insert into role_grant (role_id, permission_id)
+select $1, p.id from permission p where p.name = $2
+on conflict do nothing;
+
+-- name: Permissions :many
+select name, description from permission order by name;
+
+-- name: DeleteRole :execrows
+delete from role where tenant_id = $1 and name = $2 and not built_in;
+
+-- name: PanelUsers :many
+select u.id, u.email, r.name as role, u.oidc_subject, m.created_at
+from membership m
+join panel_user u on u.id = m.user_id
+left join role r on r.id = m.role_id
+where m.tenant_id = $1
+order by u.email;
+
+-- name: UpdatePanelUserRole :execrows
+update membership set role_id = $3 where user_id = $1 and tenant_id = $2;
+
+-- name: DeletePanelUser :execrows
+delete from membership where user_id = $1 and tenant_id = $2;
+
+-- Becoming one means leaving the role behind, and with it the tenant the role
+-- belonged to; giving it up means being given a role again.
+-- name: SetSystemAdmin :execrows
+update panel_user set system_admin = true where id = $1;
+
+-- name: LeaveEveryTenant :exec
+delete from membership where user_id = $1;
+
+-- name: ClearSystemAdmin :execrows
+update panel_user set system_admin = false where id = $1;
+
+-- name: SetSystemAdminByEmail :execrows
+update panel_user set system_admin = true where email = $1;
+
+-- name: LeaveEveryTenantByEmail :exec
+delete from membership where user_id in (select id from panel_user where email = $1);
+
+-- name: ClearSystemAdminByEmail :execrows
+update panel_user set system_admin = false where email = $1;
+
+-- name: CountSystemAdmins :one
+select count(*) from panel_user where system_admin;
+
+-- name: RoleIDByName :one
+select id from role where (tenant_id is null or tenant_id = $1) and name = $2;
+
+-- name: RoleByID :one
+select tenant_id, name from role where id = $1;
+
+-- name: RegisterTransport :exec
+insert into transport (name) values ($1) on conflict (name) do nothing;
+
+-- name: RegisterVerifier :exec
+insert into verifier (name) values ($1) on conflict (name) do nothing;
+
+-- name: RegisterAuthMethod :exec
+insert into auth_method (name) values ($1) on conflict (name) do nothing;
+
+-- name: JoinTenant :exec
+insert into membership (user_id, tenant_id, role_id)
+values ($1, $2, $3)
+on conflict (user_id, tenant_id) do update set role_id = excluded.role_id;
+
+-- A value that names only a tenant leaves the role to whoever decides it here,
+-- so arriving again does not undo it.
+-- name: JoinFromProvider :exec
+insert into membership (user_id, tenant_id)
+values ($1, $2)
+on conflict (user_id, tenant_id) do nothing;
+
+-- A value that names the role too makes the token the truth about it as well.
+-- name: JoinFromProviderAs :exec
+insert into membership (user_id, tenant_id, role_id)
+values ($1, $2, $3)
+on conflict (user_id, tenant_id) do update set role_id = excluded.role_id;
+
+-- name: LeaveTenantsNoLongerNamed :exec
+delete from membership where user_id = $1 and tenant_id <> all($2::uuid[]);
+
+-- name: Memberships :many
+select m.tenant_id, t.slug, t.name as tenant_name, coalesce(r.name, '') as role, m.created_at
+from membership m
+join tenant t on t.id = m.tenant_id
+left join role r on r.id = m.role_id
+where m.user_id = $1
+order by t.slug;
+
+-- name: MembershipIn :one
+select coalesce(r.name, '') as role
+from membership m
+left join role r on r.id = m.role_id
+where m.user_id = $1 and m.tenant_id = $2;
+
+-- name: TenantsNamed :many
+select id, slug from tenant where slug = any($1::varchar[]);
+
+-- name: PlacementsPointedAt :many
+select p.value, p.tenant_id, coalesce(r.name, '') as role
+from claim_placement p
+left join role r on r.id = p.role_id
+where p.method = $1 and p.value = any($2::varchar[]);
+
+-- name: PointValueAt :exec
+insert into claim_placement (method, value, tenant_id, role_id)
+values ($1, $2, $3, $4)
+on conflict (method, value, tenant_id) do update set role_id = excluded.role_id;
+
+-- name: StopPointingValue :exec
+delete from claim_placement where method = $1 and value = $2 and tenant_id = $3;
+
+-- name: ValuesPointedAtTenant :many
+select p.method, p.value, coalesce(r.name, '') as role
+from claim_placement p
+left join role r on r.id = p.role_id
+where p.tenant_id = $1
+order by p.method, p.value;
