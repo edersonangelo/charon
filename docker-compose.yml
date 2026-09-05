@@ -8,6 +8,17 @@ services:
       CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
       CHARON_ADDR: ":8080"
       CHARON_LOG_LEVEL: debug
+      # Single sign-on is off until an issuer is given. Put the values in a
+      # .env file next to this one; none of them belong in a committed file.
+      CHARON_OIDC_ISSUER: ${CHARON_OIDC_ISSUER:-}
+      CHARON_OIDC_CLIENT_ID: ${CHARON_OIDC_CLIENT_ID:-}
+      CHARON_OIDC_CLIENT_SECRET: ${CHARON_OIDC_CLIENT_SECRET:-}
+      CHARON_OIDC_REDIRECT_URL: ${CHARON_OIDC_REDIRECT_URL:-}
+      CHARON_OIDC_TENANT_CLAIM: ${CHARON_OIDC_TENANT_CLAIM:-}
+      CHARON_AUTO_PROVISION: ${CHARON_AUTO_PROVISION:-}
+      CHARON_REQUIRED_CLAIM: ${CHARON_REQUIRED_CLAIM:-}
+      CHARON_ACCEPT_UNVERIFIED_EMAIL: ${CHARON_ACCEPT_UNVERIFIED_EMAIL:-}
+      CHARON_DEFAULT_ROLE: ${CHARON_DEFAULT_ROLE:-viewer}
     ports:
       - "${CHARON_HOST_PORT:-8080}:8080"
     depends_on:
