@@ -49,3 +49,11 @@ select provider, count(*)::bigint as refused
 from inbound_event
 where tenant_id = $1 and signature in ('invalid', 'missing')
 group by provider;
+
+-- name: KnownProviders :many
+select p.name from provider p where p.tenant_id = $1
+union
+select e.provider from inbound_event e where e.tenant_id = $1
+union
+select r.provider from route r where r.tenant_id = $1
+order by 1;

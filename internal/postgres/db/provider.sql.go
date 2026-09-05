@@ -26,6 +26,35 @@ func (q *Queries) DeleteProvider(ctx context.Context, arg DeleteProviderParams) 
 	return err
 }
 
+const knownProviders = `-- name: KnownProviders :many
+select p.name from provider p where p.tenant_id = $1
+union
+select e.provider from inbound_event e where e.tenant_id = $1
+union
+select r.provider from route r where r.tenant_id = $1
+order by 1
+`
+
+func (q *Queries) KnownProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, knownProviders, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markSignature = `-- name: MarkSignature :exec
 update inbound_event set signature = $2 where id = $1
 `

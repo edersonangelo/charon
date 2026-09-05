@@ -213,6 +213,18 @@ func (s *Store) DeleteProvider(ctx context.Context, name string) error {
 	return nil
 }
 
+// KnownProviders names every provider this tenant has already established, by
+// configuring verification for it, by routing it, or by having received a
+// request under it. A name is never declared up front, so this is the only
+// thing a new one can be weighed against.
+func (s *Store) KnownProviders(ctx context.Context) ([]string, error) {
+	names, err := s.q.KnownProviders(ctx, s.tenantOf(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("reading the known providers: %w", err)
+	}
+	return names, nil
+}
+
 func (s *Store) ProviderChanges(ctx context.Context) <-chan struct{} {
 	return s.listenOn(ctx, "charon_provider")
 }

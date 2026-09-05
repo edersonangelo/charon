@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -119,11 +121,40 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
+	known, err := store.KnownProviders(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := store.AddRoute(ctx, *provider, *destination, *url, *transport); err != nil {
 		return err
 	}
 
-	_, err = fmt.Fprintf(stdout, "routed %s to %s (%s)\n", *provider, *destination, *url)
+	if _, err := fmt.Fprintf(stdout, "routed %s to %s (%s)\n",
+		*provider, *destination, *url); err != nil {
+		return err
+	}
+	return warnUnknownProvider(stderr, *provider, known)
+}
+
+// A provider name is never declared before it is used, so routing one nothing
+// has arrived for is how every deployment starts and cannot be refused. Naming
+// the ones already established is what makes a misspelling visible, instead of
+// leaving a route that silently receives nothing.
+func warnUnknownProvider(stderr io.Writer, provider string, known []string) error {
+	if slices.Contains(known, provider) {
+		return nil
+	}
+	if len(known) == 0 {
+		_, err := fmt.Fprintf(stderr,
+			"warning: nothing has arrived for %q and it has no verification configured\n",
+			provider)
+		return err
+	}
+	_, err := fmt.Fprintf(stderr,
+		"warning: nothing has arrived for %q and it has no verification configured; "+
+			"this tenant already knows %s\n",
+		provider, strings.Join(known, ", "))
 	return err
 }
 

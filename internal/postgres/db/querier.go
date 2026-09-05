@@ -59,6 +59,7 @@ type Querier interface {
 	// A value that names the role too makes the token the truth about it as well.
 	JoinFromProviderAs(ctx context.Context, arg JoinFromProviderAsParams) error
 	JoinTenant(ctx context.Context, arg JoinTenantParams) error
+	KnownProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error)
 	LeaveEveryTenant(ctx context.Context, userID uuid.UUID) error
 	LeaveEveryTenantByEmail(ctx context.Context, email string) error
 	LeaveTenantsNoLongerNamed(ctx context.Context, arg LeaveTenantsNoLongerNamedParams) error
