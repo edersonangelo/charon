@@ -1360,7 +1360,7 @@ func (q *Queries) Roles(ctx context.Context, tenantID pgtype.UUID) ([]RolesRow, 
 }
 
 const routeByID = `-- name: RouteByID :one
-select r.id, r.provider, d.id as destination_id, d.name, d.enabled
+select r.id, r.provider, d.id as destination_id, d.name, d.enabled, d.url
 from route r join destination d on d.id = r.destination_id
 where r.id = $1 and r.tenant_id = $2
 `
@@ -1376,6 +1376,7 @@ type RouteByIDRow struct {
 	DestinationID uuid.UUID
 	Name          string
 	Enabled       bool
+	Url           string
 }
 
 func (q *Queries) RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByIDRow, error) {
@@ -1387,6 +1388,7 @@ func (q *Queries) RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByID
 		&i.DestinationID,
 		&i.Name,
 		&i.Enabled,
+		&i.Url,
 	)
 	return i, err
 }
@@ -1636,6 +1638,32 @@ func (q *Queries) TenantsNamed(ctx context.Context, dollar_1 []string) ([]Tenant
 		return nil, err
 	}
 	return items, nil
+}
+
+const tryAgainAtTheNewAddress = `-- name: TryAgainAtTheNewAddress :execrows
+update delivery
+set attempts = 0,
+    next_attempt_at = now(),
+    leased_until = null,
+    last_status = null,
+    last_error = null
+where tenant_id = $1 and destination_id = $2 and state = 'pending'
+`
+
+type TryAgainAtTheNewAddressParams struct {
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+}
+
+// What failed against an address that was wrong did not fail against the
+// destination, so a corrected address gets the attempts back and is tried at
+// once rather than at the end of a backoff earned by a typo.
+func (q *Queries) TryAgainAtTheNewAddress(ctx context.Context, arg TryAgainAtTheNewAddressParams) (int64, error) {
+	result, err := q.db.Exec(ctx, tryAgainAtTheNewAddress, arg.TenantID, arg.DestinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unplanEvent = `-- name: UnplanEvent :exec

@@ -550,6 +550,24 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 		return fmt.Errorf("updating destination %s: %w", route.Name, err)
 	}
 
+	// An address that was wrong is the commonest reason a delivery is failing,
+	// and correcting it is the operator saying so. Whatever is still waiting
+	// for that destination has spent its attempts on somewhere that was never
+	// going to answer, so it starts over and is tried now.
+	if url != route.Url {
+		woken, wakeErr := q.TryAgainAtTheNewAddress(ctx, db.TryAgainAtTheNewAddressParams{
+			TenantID: s.tenantOf(ctx), DestinationID: route.DestinationID,
+		})
+		if wakeErr != nil {
+			return fmt.Errorf("waking what waits for %q: %w", route.Name, wakeErr)
+		}
+		if woken > 0 {
+			if err := q.NotifyWork(ctx); err != nil {
+				return fmt.Errorf("announcing the waiting deliveries: %w", err)
+			}
+		}
+	}
+
 	// A destination coming back on has the same gap a new route has: events
 	// planned while it was off carry no delivery for it.
 	if enabled && !route.Enabled {

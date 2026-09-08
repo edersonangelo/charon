@@ -165,6 +165,10 @@ type Querier interface {
 	TenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	Tenants(ctx context.Context) ([]Tenant, error)
 	TenantsNamed(ctx context.Context, dollar_1 []string) ([]TenantsNamedRow, error)
+	// What failed against an address that was wrong did not fail against the
+	// destination, so a corrected address gets the attempts back and is tried at
+	// once rather than at the end of a backoff earned by a typo.
+	TryAgainAtTheNewAddress(ctx context.Context, arg TryAgainAtTheNewAddressParams) (int64, error)
 	UnplanEvent(ctx context.Context, arg UnplanEventParams) error
 	UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error)
 	UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error)
