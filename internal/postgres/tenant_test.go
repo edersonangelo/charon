@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
@@ -138,5 +139,102 @@ func TestAnUnknownSlugIsNotATenant(t *testing.T) {
 
 	if _, known, err := store.Tenant(context.Background(), "nobody"); err != nil || known {
 		t.Errorf("Tenant(%q) = known %v, err %v; want not known and no error", "nobody", known, err)
+	}
+}
+
+// The bug this guards: the process that receives webhooks resolves a slug once
+// and holds it, while the one that removes and makes tenants is the command
+// line or the panel. Held across that, a slug made again points at the tenant
+// that is gone, and every webhook sent to that address is refused with a
+// foreign key violation for as long as the process lives.
+func TestASlugMadeAgainIsTheNewTenant(t *testing.T) {
+	t.Parallel()
+
+	receiving, dsn := open(t)
+	ctx, stop := context.WithTimeout(context.Background(), 20*time.Second)
+	defer stop()
+
+	// A second store on the same database is the other process: the command
+	// line, or the panel, neither of which runs where webhooks are received.
+	administering, err := postgres.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("opening the administering store: %v", err)
+	}
+	defer administering.Close()
+
+	changes := receiving.TenantChanges(ctx)
+	go func() {
+		for range changes {
+			receiving.ForgetTenants()
+		}
+	}()
+	time.Sleep(500 * time.Millisecond)
+
+	first, err := administering.CreateTenant(ctx, "reused", "First")
+	if err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	held, found, err := receiving.Tenant(ctx, "reused")
+	if err != nil || !found {
+		t.Fatalf("resolving: %v", err)
+	}
+	if held != first.ID {
+		t.Fatalf("resolved to %s, want %s", held, first.ID)
+	}
+
+	if err := administering.DeleteTenant(ctx, "reused"); err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	second, err := administering.CreateTenant(ctx, "reused", "Second")
+	if err != nil {
+		t.Fatalf("creating it again: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("the same identifier came back, so this proves nothing")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		again, found, resolveErr := receiving.Tenant(ctx, "reused")
+		if resolveErr != nil {
+			t.Fatalf("resolving again: %v", resolveErr)
+		}
+		if found && again == second.ID {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the address still points at the removed tenant: got %s, want %s",
+				again, second.ID)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// Removing a tenant in one process has to reach the one receiving webhooks,
+// which is what the announcement is for.
+func TestATenantChangeIsAnnounced(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+
+	changes := store.TenantChanges(ctx)
+	// The listener connects in the background; without this the notification
+	// is sent before anything is subscribed to hear it.
+	time.Sleep(500 * time.Millisecond)
+
+	if _, err := store.CreateTenant(ctx, "announced", "Announced"); err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	select {
+	case _, open := <-changes:
+		if !open {
+			t.Fatal("the channel closed instead of reporting the change")
+		}
+	case <-ctx.Done():
+		t.Fatal("creating a tenant was not announced")
 	}
 }

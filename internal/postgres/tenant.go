@@ -61,6 +61,9 @@ func (s *Store) CreateTenant(ctx context.Context, slug, name string) (console.Te
 	if err != nil {
 		return console.Tenant{}, fmt.Errorf("creating tenant %q: %w", slug, err)
 	}
+	if err := q.NotifyTenants(ctx); err != nil {
+		return console.Tenant{}, fmt.Errorf("announcing tenant %q: %w", slug, err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return console.Tenant{}, fmt.Errorf("committing tenant %q: %w", slug, err)
 	}
@@ -77,11 +80,20 @@ func (s *Store) DeleteTenant(ctx context.Context, slug string) error {
 		return fmt.Errorf("deleting tenant %q: %w", slug, err)
 	}
 	s.forgetTenant(slug)
+	if err := s.q.NotifyTenants(ctx); err != nil {
+		return fmt.Errorf("announcing the removal of %q: %w", slug, err)
+	}
 	return nil
 }
 
-// Tenant resolves a slug to its id. The mapping never changes for a living
-// tenant, so it is held to keep an address lookup off every inbound request.
+// Tenant resolves a slug to its id, holding the mapping to keep an address
+// lookup off every inbound request.
+//
+// What is held is only correct until somebody creates or removes a tenant,
+// which is usually another process: the command line and the panel do not run
+// where webhooks are received. A slug removed and made again is a different
+// tenant wearing the same address, so ForgetTenants is what a change announced
+// over the database is meant to call.
 func (s *Store) Tenant(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	s.tenantMu.RLock()
 	id, held := s.tenantBySlug[slug]
@@ -103,6 +115,19 @@ func (s *Store) Tenant(ctx context.Context, slug string) (uuid.UUID, bool, error
 	s.tenantMu.Unlock()
 
 	return tenant.ID, true, nil
+}
+
+// ForgetTenants drops every held mapping, so the next request for any slug
+// resolves it again.
+func (s *Store) ForgetTenants() {
+	s.tenantMu.Lock()
+	clear(s.tenantBySlug)
+	s.tenantMu.Unlock()
+}
+
+// TenantChanges reports that a tenant was created or removed, anywhere.
+func (s *Store) TenantChanges(ctx context.Context) <-chan struct{} {
+	return s.listenOn(ctx, "charon_tenant")
 }
 
 func (s *Store) forgetTenant(slug string) {

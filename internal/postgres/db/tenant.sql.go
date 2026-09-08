@@ -39,6 +39,15 @@ func (q *Queries) DeleteTenant(ctx context.Context, slug string) error {
 	return err
 }
 
+const notifyTenants = `-- name: NotifyTenants :exec
+select pg_notify('charon_tenant', '')
+`
+
+func (q *Queries) NotifyTenants(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, notifyTenants)
+	return err
+}
+
 const tenantBySlug = `-- name: TenantBySlug :one
 select id, slug, name, created_at from tenant where slug = $1
 `

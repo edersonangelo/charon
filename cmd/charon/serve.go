@@ -78,6 +78,7 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
 	go verification.Watch(watching)
+	go forgetTenantsOnChange(watching, store)
 
 	mux := http.NewServeMux()
 	ingest.New(store, ingest.Config{
@@ -264,6 +265,26 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// A slug is resolved to a tenant once and held, which stops being true the
+// moment somebody creates or removes a tenant somewhere else — the command
+// line and the panel do not run in this process. Left held, a slug removed and
+// made again points at a tenant that no longer exists, and every webhook sent
+// to that address is refused until this process restarts.
+func forgetTenantsOnChange(ctx context.Context, store *postgres.Store) {
+	changes := store.TenantChanges(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, open := <-changes:
+			if !open {
+				return
+			}
+			store.ForgetTenants()
+		}
+	}
 }
 
 func newLogger(out io.Writer, level string) *slog.Logger {

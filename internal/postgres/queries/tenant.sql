@@ -9,3 +9,6 @@ select * from tenant order by slug;
 
 -- name: DeleteTenant :exec
 delete from tenant where slug = $1;
+
+-- name: NotifyTenants :exec
+select pg_notify('charon_tenant', '');
