@@ -35,6 +35,8 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	maxAttempts := fs.Int("max-attempts", 12, "attempts before a delivery is dead lettered")
 	backoffBase := fs.Duration("backoff-base", 5*time.Second, "first retry window")
 	backoffCap := fs.Duration("backoff-cap", time.Hour, "largest retry window")
+	purgeEvery := fs.Duration("purge-every", time.Hour,
+		"how often to discard events past what their tenant keeps")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing flags: %w", err)
@@ -66,6 +68,7 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	defer stop()
 
 	go reportWhatCanBeSigned(ctx, store, logger)
+	go purgeWhatIsNoLongerKept(ctx, store, *purgeEvery, logger)
 
 	return dispatcher.Run(ctx)
 }
@@ -112,6 +115,42 @@ func reportWhatCanBeSigned(ctx context.Context, store *postgres.Store, logger *s
 			report()
 		case <-ticker.C:
 			report()
+		}
+	}
+}
+
+// Discarding happens where delivering happens, because the two have to agree
+// about what is still needed: nothing is discarded while a delivery for it is
+// still pending, and this is the process that decides when one stops being.
+//
+// A tenant that has not asked to lose anything keeps everything, so on most
+// deployments this finds nothing to do and says nothing about it.
+func purgeWhatIsNoLongerKept(
+	ctx context.Context, store *postgres.Store, every time.Duration, logger *slog.Logger,
+) {
+	if every <= 0 {
+		return
+	}
+
+	discard := func() {
+		discarded, err := store.Purge(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			logger.ErrorContext(ctx, "could not discard what is no longer kept", "error", err)
+		case discarded > 0:
+			logger.InfoContext(ctx, "discarded events past their retention", "events", discarded)
+		}
+	}
+
+	discard()
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			discard()
 		}
 	}
 }

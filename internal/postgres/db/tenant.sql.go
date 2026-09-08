@@ -10,7 +10,7 @@ import (
 )
 
 const createTenant = `-- name: CreateTenant :one
-insert into tenant (slug, name) values ($1, $2) returning id, slug, name, created_at
+insert into tenant (slug, name) values ($1, $2) returning id, slug, name, created_at, retention_days
 `
 
 type CreateTenantParams struct {
@@ -26,6 +26,7 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		&i.Slug,
 		&i.Name,
 		&i.CreatedAt,
+		&i.RetentionDays,
 	)
 	return i, err
 }
@@ -49,7 +50,7 @@ func (q *Queries) NotifyTenants(ctx context.Context) error {
 }
 
 const tenantBySlug = `-- name: TenantBySlug :one
-select id, slug, name, created_at from tenant where slug = $1
+select id, slug, name, created_at, retention_days from tenant where slug = $1
 `
 
 func (q *Queries) TenantBySlug(ctx context.Context, slug string) (Tenant, error) {
@@ -60,12 +61,13 @@ func (q *Queries) TenantBySlug(ctx context.Context, slug string) (Tenant, error)
 		&i.Slug,
 		&i.Name,
 		&i.CreatedAt,
+		&i.RetentionDays,
 	)
 	return i, err
 }
 
 const tenants = `-- name: Tenants :many
-select id, slug, name, created_at from tenant order by slug
+select id, slug, name, created_at, retention_days from tenant order by slug
 `
 
 func (q *Queries) Tenants(ctx context.Context) ([]Tenant, error) {
@@ -82,6 +84,7 @@ func (q *Queries) Tenants(ctx context.Context) ([]Tenant, error) {
 			&i.Slug,
 			&i.Name,
 			&i.CreatedAt,
+			&i.RetentionDays,
 		); err != nil {
 			return nil, err
 		}

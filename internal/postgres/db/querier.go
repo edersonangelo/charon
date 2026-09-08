@@ -13,6 +13,7 @@ import (
 
 type Querier interface {
 	AddSigningSecret(ctx context.Context, arg AddSigningSecretParams) error
+	AttemptTotals(ctx context.Context, tenantID uuid.UUID) ([]AttemptTotalsRow, error)
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered. One that was
 	// never checked is: a provider with no verifier configured behaves as before.
@@ -22,6 +23,7 @@ type Querier interface {
 	ClearSystemAdminByEmail(ctx context.Context, email string) (int64, error)
 	CountEventsAwaitingRoute(ctx context.Context, tenantID uuid.UUID) (int64, error)
 	CountInboundEvents(ctx context.Context) (int64, error)
+	CountOperators(ctx context.Context) (int64, error)
 	CountPanelUsers(ctx context.Context) (int64, error)
 	CountSystemAdmins(ctx context.Context) (int64, error)
 	CountTenants(ctx context.Context) (int64, error)
@@ -45,6 +47,7 @@ type Querier interface {
 	DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error)
 	DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
+	DeliveryTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryTotalsRow, error)
 	DestinationByName(ctx context.Context, arg DestinationByNameParams) (Destination, error)
 	DestinationsWithoutSigning(ctx context.Context, tenantID uuid.UUID) ([]DestinationsWithoutSigningRow, error)
 	DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error)
@@ -52,6 +55,12 @@ type Querier interface {
 	EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error)
 	EventDeliveries(ctx context.Context, arg EventDeliveriesParams) ([]EventDeliveriesRow, error)
 	EventDetail(ctx context.Context, arg EventDetailParams) (EventDetailRow, error)
+	// Every number a scrape reports, one tenant at a time. A scrape covers the
+	// whole deployment, but each query still names the tenant it counts: the
+	// tenant is pinned on the connection, not on the statement, so a query that
+	// left it out would count whatever the pooled connection happened to be
+	// pinned to and report it under every tenant's name.
+	EventTotals(ctx context.Context, tenantID uuid.UUID) ([]EventTotalsRow, error)
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
@@ -81,6 +90,7 @@ type Querier interface {
 	NotifySigning(ctx context.Context) error
 	NotifyTenants(ctx context.Context) error
 	NotifyWork(ctx context.Context) error
+	OldestPending(ctx context.Context, tenantID uuid.UUID) ([]OldestPendingRow, error)
 	OldestPendingAge(ctx context.Context) (float64, error)
 	PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error)
 	PanelUserByEmail(ctx context.Context, email string) (PanelUser, error)
@@ -91,6 +101,11 @@ type Querier interface {
 	PointValueAt(ctx context.Context, arg PointValueAtParams) error
 	ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlreadyRoutedToParams) (bool, error)
 	Providers(ctx context.Context, tenantID uuid.UUID) ([]ProvidersRow, error)
+	// An event is only discarded once nothing is still trying to deliver it. A
+	// pending delivery is live work, and its age says the destination has been
+	// unreachable for a long time, which is a reason to look rather than to erase.
+	PurgeEvents(ctx context.Context, arg PurgeEventsParams) (int64, error)
+	PurgeableEvents(ctx context.Context, arg PurgeableEventsParams) (int64, error)
 	RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error
 	RecordSigningCheck(ctx context.Context, arg RecordSigningCheckParams) error
 	RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]RefusedByProviderRow, error)
@@ -104,6 +119,7 @@ type Querier interface {
 	ReplayDelivery(ctx context.Context, arg ReplayDeliveryParams) (int64, error)
 	ReplayDestination(ctx context.Context, arg ReplayDestinationParams) (int64, error)
 	ReplayEvent(ctx context.Context, arg ReplayEventParams) (int64, error)
+	Retentions(ctx context.Context) ([]RetentionsRow, error)
 	Role(ctx context.Context, arg RoleParams) (RoleRow, error)
 	RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, error)
 	RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uuid.UUID, error)
@@ -114,6 +130,7 @@ type Querier interface {
 	// reported apart as history.
 	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
 	SetProvider(ctx context.Context, arg SetProviderParams) error
+	SetRetention(ctx context.Context, arg SetRetentionParams) (int64, error)
 	SetRole(ctx context.Context, arg SetRoleParams) (uuid.UUID, error)
 	// Becoming one means leaving the role behind, and with it the tenant the role
 	// belonged to; giving it up means being given a role again.

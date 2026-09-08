@@ -180,10 +180,11 @@ type SigningSecretCheck struct {
 }
 
 type Tenant struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	CreatedAt time.Time
+	ID            uuid.UUID
+	Slug          string
+	Name          string
+	CreatedAt     time.Time
+	RetentionDays pgtype.Int4
 }
 
 type Transport struct {

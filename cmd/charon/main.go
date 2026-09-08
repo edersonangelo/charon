@@ -25,6 +25,8 @@ Commands:
   sign      Configure how deliveries leaving here are signed
   tenant    Manage the tenants events are recorded for
   role      Manage roles, what they grant and who gets them
+  retention How long each tenant's events are kept
+  purge     Discard events past what their tenant keeps
   migrate   Apply pending schema migrations and exit
   version   Print the build version and exit
   help      Print this message
@@ -65,6 +67,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return tenant(ctx, rest, stdout, stderr)
 	case "role":
 		return role(ctx, rest, stdout, stderr)
+	case "retention":
+		return retention(ctx, rest, stdout, stderr)
+	case "purge":
+		return purge(ctx, rest, stdout, stderr)
 	case "migrate":
 		return migrate(ctx, rest, stdout, stderr)
 	case "version":
