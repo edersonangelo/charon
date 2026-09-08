@@ -257,7 +257,13 @@ const unverifiedEvents = `-- name: UnverifiedEvents :many
 select e.id, e.provider, r.headers, r.body
 from inbound_event e
 join inbound_request r on r.event_id = e.id
-where e.tenant_id = $1 and e.provider = $2 and e.signature in ('invalid', 'missing')
+where e.tenant_id = $1 and e.provider = $2
+  and e.signature in ('invalid', 'missing', 'unchecked')
+  -- Something already handed over cannot be taken back, so it keeps the answer
+  -- it went out with. Saying now that it was never signed would claim it had
+  -- been held, and it was not.
+  and not exists (select 1 from delivery d
+                  where d.event_id = e.id and d.state = 'delivered')
 order by e.received_at
 limit $3
 `
