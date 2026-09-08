@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres/db"
 	"github.com/edersonangelo/charon/internal/provider"
@@ -25,6 +26,21 @@ var (
 // Creates the delivery rows a recorded event is owed, one per enabled route
 // for its provider. Runs after ingestion so that the inbound port never has to
 // know about routing.
+// turns is how many rounds of planning or claiming have happened, so each one
+// starts at a different tenant.
+//
+// Without it the budget is spent in whatever order the tenants come back in,
+// and a busy tenant early in that order takes the whole batch every round
+// while the ones after it are never reached. Starting one further along each
+// time means every tenant leads eventually, however busy its neighbours are.
+func (s *Store) inTurn(tenants []console.Tenant) []console.Tenant {
+	if len(tenants) < 2 {
+		return tenants
+	}
+	at := int((s.turns.Add(1) - 1) % uint64(len(tenants))) //nolint:gosec // bounded by the length
+	return append(append([]console.Tenant{}, tenants[at:]...), tenants[:at]...)
+}
+
 // Plan turns what arrived into deliveries, for every tenant.
 //
 // One tenant at a time, because the process that plans works for all of them
@@ -39,7 +55,7 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 	}
 
 	planned, left := 0, batch
-	for _, tenant := range tenants {
+	for _, tenant := range s.inTurn(tenants) {
 		if left <= 0 {
 			break
 		}
@@ -132,7 +148,7 @@ func (s *Store) Claim(
 	}
 
 	all := make([]outbound.Delivery, 0, batch)
-	for _, tenant := range tenants {
+	for _, tenant := range s.inTurn(tenants) {
 		left := batch - len(all)
 		if left <= 0 {
 			break

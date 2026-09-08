@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,6 +29,10 @@ type Store struct {
 	tenantMu     sync.RWMutex
 	tenantBySlug map[string]uuid.UUID
 	pinned       sync.Map
+
+	// Which tenant the next round of planning or claiming starts at, so a busy
+	// one does not take the whole batch every time.
+	turns atomic.Uint64
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
