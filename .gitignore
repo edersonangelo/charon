@@ -14,3 +14,6 @@ coverage.*
 .idea/
 .vscode/
 *.swp
+
+# Taken from the release machine at release time, never committed.
+ca-certificates.crt

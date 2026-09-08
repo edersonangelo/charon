@@ -5,7 +5,7 @@ no broker, no sidecar, no agent, and no call to any service this project
 controls.
 
 ```sh
-docker pull edersomangelo/charon:alpha
+docker pull edersomangelo/charon:latest
 ```
 
 `linux/amd64` and `linux/arm64`, built from `scratch`: the binary, the CA
@@ -15,12 +15,13 @@ certificates and nothing else. It runs as uid `65534` and needs no root.
 
 | tag | |
 |---|---|
-| `alpha` | the newest pre-release, and it moves |
-| `0.1.0-alpha.3` | that one, and it does not |
+| `latest` | the newest release, and it moves |
+| `0.1` | the newest of that minor line |
+| `0.1.0` | that one, and it does not |
 
-Pin the version anywhere you would be upset to be upgraded without asking.
-There is deliberately no `latest`: nothing is released yet that somebody should
-get by not choosing.
+Pin the version anywhere you would be upset to be upgraded without asking. A
+pre-release answers only to its own exact version — `latest` never points at
+one.
 
 ## What it is made of
 
@@ -44,11 +45,11 @@ export CHARON_DATABASE_URL='postgres://charon:charon@db:5432/charon?sslmode=disa
 
 docker run -d --name charon-server \
   -e CHARON_DATABASE_URL -p 8080:8080 \
-  edersomangelo/charon:alpha
+  edersomangelo/charon:latest
 
 docker run -d --name charon-dispatcher \
   -e CHARON_DATABASE_URL \
-  edersomangelo/charon:alpha dispatch
+  edersomangelo/charon:latest dispatch
 ```
 
 To keep them up across reboots, a compose file of your own, using the published
@@ -57,7 +58,7 @@ image rather than building anything:
 ```yaml
 services:
   charon:
-    image: edersomangelo/charon:0.1.0-alpha.3
+    image: edersomangelo/charon:0.1.0
     environment:
       CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
     env_file:
@@ -71,7 +72,7 @@ services:
     restart: unless-stopped
 
   dispatcher:
-    image: edersomangelo/charon:0.1.0-alpha.3
+    image: edersomangelo/charon:0.1.0
     command: ["dispatch"]
     environment:
       CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
@@ -149,7 +150,7 @@ spec:
     spec:
       containers:
         - name: charon
-          image: edersomangelo/charon:0.1.0-alpha.3
+          image: edersomangelo/charon:0.1.0
           args: ["serve"]
           envFrom:
             - secretRef: { name: charon }
@@ -183,7 +184,7 @@ spec:
     spec:
       containers:
         - name: charon
-          image: edersomangelo/charon:0.1.0-alpha.3
+          image: edersomangelo/charon:0.1.0
           args: ["dispatch"]
           envFrom:
             - secretRef: { name: charon }
