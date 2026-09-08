@@ -1,0 +1,672 @@
+package web
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/provider"
+)
+
+templ eventsPage(events []console.EventSummary, providers []string, filter console.Filter) {
+	<h1>Events</h1>
+	@filters(providers, filter)
+	@eventsTable(events, filter)
+}
+
+templ filters(providers []string, filter console.Filter) {
+	<form class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
+		<input type="search" name="q" value={ filter.Search } placeholder="event id or text in body" size="32"/>
+		<select name="provider">
+			<option value="">any provider</option>
+			for _, provider := range providers {
+				if provider == filter.Provider {
+					<option value={ provider } selected>{ provider }</option>
+				} else {
+					<option value={ provider }>{ provider }</option>
+				}
+			}
+		</select>
+		<select name="state">
+			<option value="">any state</option>
+			for _, state := range deliveryStates {
+				if state.value == filter.State {
+					<option value={ state.value } selected>{ state.label }</option>
+				} else {
+					<option value={ state.value }>{ state.label }</option>
+				}
+			}
+		</select>
+		<select name="signature">
+			<option value="">any signature</option>
+			for _, state := range signatureStates {
+				if state.value == filter.Signature {
+					<option value={ state.value } selected>{ state.label }</option>
+				} else {
+					<option value={ state.value }>{ state.label }</option>
+				}
+			}
+		</select>
+		<input type="datetime-local" name="since" value={ localTime(filter.Since) } title="received from"/>
+		<input type="datetime-local" name="until" value={ localTime(filter.Until) } title="received until"/>
+		<button>search</button>
+		<a href="/events"><button type="button">clear</button></a>
+	</form>
+}
+
+templ eventsTable(events []console.EventSummary, filter console.Filter) {
+	<div id="events">
+		if len(events) == 0 {
+			<p class="muted">Nothing matches.</p>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>received</th>
+						<th>provider</th>
+						<th>size</th>
+						<th>deliveries</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, event := range events {
+						<tr data-open
+								hx-get={ "/events/" + event.ID.String() + "/fragment" }
+								hx-target="#detail-body" hx-swap="innerHTML">
+							<td>{ stamp(event.ReceivedAt) }</td>
+							<td>{ event.Provider }@signatureBadge(event.Signature)</td>
+							<td>{ fmt.Sprintf("%d B", event.BodySize) }</td>
+							<td>@deliveryCounts(event)</td>
+							<td onclick="event.stopPropagation()">
+								if may(ctx, authz.EventsReplay) {
+									<button hx-post={ "/events/" + event.ID.String() + "/replay?view=list" }
+											hx-target="#events" hx-select="#events" hx-swap="outerHTML"
+											hx-include=".filters"
+											hx-confirm="Replay every delivery of this event?">replay</button>
+								}
+								<a href={ templ.SafeURL("/events/" + event.ID.String()) }><button type="button">open</button></a>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			@pager(len(events), filter)
+		}
+	</div>
+}
+
+templ deliveryCounts(event console.EventSummary) {
+	if event.Deliveries == 0 {
+		if event.Planned {
+			<span class="muted">none routed</span>
+		} else {
+			<span class="pending">awaiting a route</span>
+		}
+	} else {
+		if event.Delivered > 0 {
+			<span class="delivered">{ fmt.Sprintf("%d delivered", event.Delivered) }</span>
+		}
+		if event.Pending > 0 {
+			<span class="pending">{ fmt.Sprintf("%d pending", event.Pending) }</span>
+		}
+		if event.Dead > 0 {
+			<span class="dead">{ fmt.Sprintf("%d dead", event.Dead) }</span>
+		}
+		if event.Attempts > 1 {
+			<span class="muted">{ counted(int(event.Attempts), "attempt") }</span>
+		}
+	}
+	if event.Unrouted > 0 {
+		<span class="muted">{ fmt.Sprintf("%d no longer routed", event.Unrouted) }</span>
+	}
+}
+
+templ pager(count int, filter console.Filter) {
+	<p class="muted">
+		if filter.Page > 1 {
+			<a href={ templ.SafeURL(pageLink(filter, filter.Page-1)) }>previous</a>
+		}
+		{ fmt.Sprintf(" page %d ", max(filter.Page, 1)) }
+		if count == filter.Size() {
+			<a href={ templ.SafeURL(pageLink(filter, max(filter.Page, 1)+1)) }>next</a>
+		}
+	</p>
+}
+
+templ eventPage(event console.EventDetail, deliveries []console.Delivery) {
+	@eventDetail(event, deliveries, false)
+}
+
+templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inModal bool) {
+	<h1>
+		{ event.Provider } <span class="muted">{ event.ID.String() }</span>
+		if inModal {
+			<a href={ templ.SafeURL("/events/" + event.ID.String()) } class="muted">open full page</a>
+		}
+	</h1>
+	<section>
+		<table>
+			<tbody>
+				<tr><th>signature</th><td>@signatureBadge(event.Signature) @signatureNote(event.Signature)</td></tr>
+				<tr><th>received</th><td>{ stamp(event.ReceivedAt) }</td></tr>
+				<tr><th>path</th><td>{ event.Path }</td></tr>
+				<tr><th>size</th><td>{ fmt.Sprintf("%d bytes", event.BodySize) }</td></tr>
+				<tr>
+					<th>planned</th>
+					<td>
+						if event.Planned {
+							yes
+						} else {
+							<span class="pending">no, awaiting a route</span>
+						}
+					</td>
+				</tr>
+			</tbody>
+		</table>
+	</section>
+	<section>
+		<h2>Deliveries
+			if may(ctx, authz.EventsReplay) {
+				if inModal {
+					<button hx-post={ "/events/" + event.ID.String() + "/replay?view=fragment" }
+							hx-target="#detail-body" hx-swap="innerHTML"
+							hx-confirm="Replay every delivery of this event?">replay all</button>
+				} else {
+					<button hx-post={ "/events/" + event.ID.String() + "/replay" }
+							hx-target="body" hx-swap="outerHTML"
+							hx-confirm="Replay every delivery of this event?">replay all</button>
+				}
+			}
+		</h2>
+		if len(deliveries) == 0 {
+			<p class="muted">No delivery has been planned for this event.</p>
+		} else {
+			for _, delivery := range deliveries {
+				@deliveryBlock(event.ID.String(), delivery, inModal)
+			}
+		}
+	</section>
+	<section>
+		<h2>Headers</h2>
+		<pre>{ formatHeaders(event.Headers) }</pre>
+	</section>
+	<section>
+		<h2>
+			Body
+			<button type="button" onclick="copyBody(this)"
+					title="copies the body exactly as it was received">copy</button>
+		</h2>
+		if isJSON(event.Body) {
+			<pre class="code">{ prettyJSON(event.Body) }</pre>
+			<details>
+				<summary class="muted">raw, exactly as received</summary>
+				<pre class="raw-body">{ string(event.Body) }</pre>
+			</details>
+		} else {
+			<pre class="raw-body">{ string(event.Body) }</pre>
+		}
+	</section>
+}
+
+templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
+	<section>
+		<table>
+			<tbody>
+				<tr>
+					<th>{ delivery.Destination }</th>
+					<td class="wrap">
+						<span class={ delivery.State }>{ delivery.State }</span>
+						<span class="muted">{ " " + counted(int(delivery.Attempts), "attempt") }</span>
+						if delivery.ReplayCount > 0 {
+							<span class="pill">{ fmt.Sprintf("replayed %d×", delivery.ReplayCount) }</span>
+						}
+						if !delivery.Routed {
+							<span class="pill dead">no longer routed</span>
+						}
+						if delivery.Routed && may(ctx, authz.EventsReplay) {
+							if inModal {
+								<button hx-post={ "/events/" + eventID + "/deliveries/" + delivery.ID.String() + "/replay?view=fragment" }
+										hx-target="#detail-body" hx-swap="innerHTML">replay</button>
+							} else {
+								<button hx-post={ "/events/" + eventID + "/deliveries/" + delivery.ID.String() + "/replay" }
+										hx-target="body" hx-swap="outerHTML">replay</button>
+							}
+						}
+						<br/>
+						<span class="muted">{ delivery.URL }</span>
+						if delivery.LastError != "" {
+							<br/><span class="dead">{ delivery.LastError }</span>
+						}
+					</td>
+				</tr>
+			</tbody>
+		</table>
+		if len(delivery.Rounds) > 0 {
+			<details>
+				<summary class="muted">{ historySummary(delivery) }</summary>
+				for _, round := range delivery.Rounds {
+					<h2>
+						{ round.Title() }
+						<span class="muted">{ counted(len(round.Attempts), "attempt") }</span>
+					</h2>
+					<div class="scroll attempts">
+						<table>
+							<thead>
+								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>signed with</th><th>error</th></tr>
+							</thead>
+							<tbody>
+								for _, attempt := range round.Attempts {
+									<tr>
+										<td>{ fmt.Sprint(attempt.Attempt) }</td>
+										<td>{ stamp(attempt.AttemptedAt) }</td>
+										<td>
+											if attempt.Status > 0 {
+												{ fmt.Sprint(attempt.Status) }
+											} else {
+												<span class="muted">—</span>
+											}
+										</td>
+										<td>{ fmt.Sprintf("%d ms", attempt.DurationMs) }</td>
+										<td class="wrap">
+											if attempt.SignedWith == "" {
+												<span class="muted">unsigned</span>
+											} else {
+												<code>{ attempt.SignedWith }</code>
+											}
+										</td>
+										<td class="wrap">{ attempt.Error }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</details>
+		} else {
+			<p class="muted">Not attempted yet.</p>
+		}
+	</section>
+}
+
+templ signatureBadge(state string) {
+	switch state {
+		case "valid":
+			<span class="pill delivered">signed</span>
+		case "invalid":
+			<span class="pill dead">forged</span>
+		case "missing":
+			<span class="pill dead">unsigned</span>
+		default:
+			<span class="pill muted">unchecked</span>
+	}
+}
+
+templ signatureNote(state string) {
+	switch state {
+		case "valid":
+			<span class="muted">the signature matched the configured secret</span>
+		case "invalid":
+			<span class="dead">the signature did not match, so this was never delivered</span>
+		case "missing":
+			<span class="dead">no signature was sent, so this was never delivered</span>
+		default:
+			<span class="muted">no verification is configured for this provider</span>
+	}
+}
+
+templ verificationPage(items []console.Verification, providers []string) {
+	<div id="verification">
+		@settingsNav("/verification")
+		<h1>Verification</h1>
+		<p class="muted">
+			A provider with no verification recorded here is accepted as it always was. Once a
+			verifier is configured, a request whose signature does not match is still recorded,
+			marked, and never delivered anywhere.
+		</p>
+		<p class="muted">
+			The secret is never stored: a row names the environment variable that carries it, so
+			a database dump cannot be used to forge a signature.
+		</p>
+		if len(items) == 0 {
+			<p class="muted">No provider is verified.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>provider</th><th>proof</th><th>header</th><th>secret from</th><th>refused</th><th></th></tr>
+				</thead>
+				<tbody>
+					for _, item := range items {
+						<tr>
+							<td>{ item.Provider }</td>
+							<td>{ describeProof(item) }</td>
+							<td>
+								if item.Header != "" {
+									{ item.Header }
+								} else {
+									<span class="muted">—</span>
+								}
+							</td>
+							<td>
+								{ item.SecretEnv }
+								if !item.SecretPresent {
+									<span class="pill dead">not set here</span>
+								}
+							</td>
+							<td>
+								if item.Refused > 0 {
+									<span class="dead">{ fmt.Sprintf("%d refused", item.Refused) }</span>
+								} else {
+									<span class="muted">none</span>
+								}
+							</td>
+							<td>
+								if may(ctx, authz.VerificationWrite) {
+									<form hx-post={ "/verification/" + item.Provider + "/recheck" }
+											hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">
+										if item.Refused > 0 {
+											<button hx-confirm="Check the refused requests again with the current secret?">recheck</button>
+										}
+										<button hx-post={ "/verification/" + item.Provider + "/remove" }
+												hx-target="#verification" hx-select="#verification" hx-swap="outerHTML"
+												hx-confirm="Stop checking this provider? Its requests will be accepted unchecked.">remove</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		if may(ctx, authz.VerificationWrite) {
+			<section>
+				<h2>Verify a provider</h2>
+				<form class="filters" hx-post="/verification" hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">
+					<input type="text" name="provider" placeholder="provider" list="seen-providers" required/>
+					<datalist id="seen-providers">
+						for _, name := range providers {
+							<option value={ name }></option>
+						}
+					</datalist>
+					<select name="preset">
+						for _, preset := range provider.Presets() {
+							<option value={ preset.Name } title={ preset.Description }>{ preset.Name }</option>
+						}
+					</select>
+					<input type="text" name="secret-env" placeholder="CHARON_SECRET_STRIPE" size="26" required/>
+					<input type="text" name="header" placeholder="header, to override the preset" size="26"/>
+					<button>verify</button>
+				</form>
+			</section>
+		}
+	</div>
+}
+
+// A preset is only parameters, so the panel describes what was stored rather
+// than the name it was chosen by.
+func describeProof(item console.Verification) string {
+	switch item.Verifier {
+	case provider.SharedToken:
+		return "shared token"
+	case provider.BasicAuth:
+		return "basic auth"
+	default:
+		return fmt.Sprintf("hmac %s %s, %s", item.Algorithm, item.Encoding, item.Scheme)
+	}
+}
+
+var signatureStates = []struct{ value, label string }{
+	{"valid", "signed"},
+	{"invalid", "forged"},
+	{"missing", "unsigned"},
+	{"unchecked", "unchecked"},
+}
+
+var deliveryStates = []struct{ value, label string }{
+	{"delivered", "delivered"},
+	{"pending", "pending"},
+	{"dead", "dead"},
+	{"unrouted", "awaiting a route"},
+}
+
+// Collapsed by default: with several destinations and several replays, an open
+// history buries every destination after the first.
+func historySummary(delivery console.Delivery) string {
+	attempts := 0
+	for _, round := range delivery.Rounds {
+		attempts += len(round.Attempts)
+	}
+	if len(delivery.Rounds) == 1 {
+		return fmt.Sprintf("attempt history — %d attempts", attempts)
+	}
+	return fmt.Sprintf("attempt history — %d attempts over %d runs", attempts, len(delivery.Rounds))
+}
+
+templ transportChoice(transports []string) {
+	if len(transports) > 1 {
+		<select name="transport">
+			for _, transport := range transports {
+				<option value={ transport }>{ transport }</option>
+			}
+		</select>
+	}
+}
+
+templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider, unsigned []console.UnsignedDestination, transports []string) {
+	<div id="routes">
+		@settingsNav("/routes")
+		<h1>Routes</h1>
+		if len(unsigned) > 0 {
+			<section class="attention">
+				<h2>Delivered without a signature</h2>
+				<p class="muted">
+					These destinations receive deliveries that carry no proof they came from here,
+					so anything that reaches their address looks the same to them. Give one a
+					secret in <a href="/routes">settings</a> with <code>charon sign add</code>.
+				</p>
+				<table>
+					<thead><tr><th>destination</th><th>routes</th></tr></thead>
+					<tbody>
+						for _, destination := range unsigned {
+							<tr>
+								<td><strong>{ destination.Name }</strong></td>
+								<td>{ counted(int(destination.Routes), "route") }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
+		if len(unrouted) > 0 {
+			<section class="attention">
+				<h2>Received, but going nowhere</h2>
+				<p class="muted">
+					These providers have sent events that are recorded and waiting. They have no
+					route, so nothing has been delivered. Give one a destination and every event
+					it already sent is picked up.
+				</p>
+				<table>
+					<thead>
+						<tr><th>provider</th><th>events</th><th>last received</th><th>destination url</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, provider := range unrouted {
+							<tr>
+								<td><strong>{ provider.Provider }</strong></td>
+								<td>{ fmt.Sprint(provider.Events) }</td>
+								<td>{ stamp(provider.LastReceived) }</td>
+								<td colspan="2">
+									if may(ctx, authz.RoutesWrite) {
+										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+												hx-confirm={ fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider) }>
+											<input type="hidden" name="provider" value={ provider.Provider }/>
+											<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
+											<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
+											@transportChoice(transports)
+											<button>create route</button>
+										</form>
+									} else {
+										<span class="muted">no route</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
+		<section>
+			<h2>Configured</h2>
+			<p class="muted">
+				Adding a route, or switching a destination back on, delivers every event already
+				recorded for that provider. Changing where a route points does not: what went to
+				the old address stays delivered, and resend is how you send it again.
+			</p>
+			if len(routes) == 0 {
+				<p class="muted">No route. Nothing is delivered until a provider has one.</p>
+			} else {
+				<table>
+					<thead>
+						<tr><th>provider</th><th>destination</th><th>transport</th><th>signing</th><th>url</th><th>deliveries</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, route := range routes {
+							<tr>
+								<td>{ route.Provider }</td>
+								<td>{ route.Destination }</td>
+								<td>{ route.Transport }</td>
+								<td>@signingState(route.Signing)</td>
+								<td colspan="3">
+									if may(ctx, authz.RoutesWrite) {
+										<form hx-post={ "/routes/" + route.ID.String() + "/save" }
+												hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
+											<input type="url" name="url" value={ route.URL } size="44" required/>
+											if route.Enabled {
+												<label><input type="checkbox" name="enabled" value="1" checked/> enabled</label>
+											} else {
+												<label><input type="checkbox" name="enabled" value="1"/> enabled</label>
+											}
+											<button>save</button>
+											<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+											if route.Deliveries > 0 && may(ctx, authz.EventsReplay) {
+												<button hx-post={ "/routes/" + route.ID.String() + "/resend" }
+														hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+														hx-confirm={ fmt.Sprintf("Resend all %d deliveries to this destination? Each one will be posted again.", route.Deliveries) }>resend</button>
+											}
+											<button hx-post={ "/routes/" + route.ID.String() + "/test" }
+													hx-target="body" hx-swap="outerHTML" hx-push-url="true"
+													title="deliver one synthetic event to this destination, through the dispatcher, signed exactly as a real one would be">test</button>
+											<button hx-post={ "/routes/" + route.ID.String() + "/delete" }
+													hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+													hx-confirm="Remove this route? Deliveries already recorded are kept.">remove</button>
+										</form>
+									} else {
+										<span class="muted">{ route.URL }</span>
+										if !route.Enabled {
+											<span class="pill">disabled</span>
+										}
+										<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		if may(ctx, authz.RoutesWrite) {
+			<section>
+				<h2>Add a route</h2>
+				<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+						hx-confirm="Every event already recorded for this provider will be delivered to this destination. Continue?">
+					<input type="text" name="provider" placeholder="provider" required/>
+					<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
+					<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
+					@transportChoice(transports)
+					<button>create route</button>
+				</form>
+			</section>
+		}
+	</div>
+}
+
+// What a destination signs with, and whether the process that delivers can
+// actually read it. Unread is not the same as unreadable: until the dispatcher
+// has looked, nothing here is entitled to claim either way.
+templ signingState(secrets []console.SigningSecret) {
+	if len(secrets) == 0 {
+		<span class="pill">unsigned</span>
+	} else {
+		for _, secret := range secrets {
+			<div class="signing">
+				<code>{ secret.Reference }</code>
+				switch {
+					case !secret.Checked:
+						<span class="muted" title="the dispatcher has not reported on this one yet">not read yet</span>
+					case secret.Readable:
+						<span class="pill good" title={ "read " + stamp(secret.CheckedAt) }>readable</span>
+					default:
+						<span class="pill bad" title={ secret.Detail }>unreadable</span>
+				}
+				<span class="muted">added { stamp(secret.Added) }</span>
+			</div>
+		}
+	}
+}
+
+// Bodies are stored verbatim and shown verbatim. Indenting here is a reading
+// aid over a copy, and the original is one click away.
+const prettyLimit = 256 << 10
+
+func isJSON(body []byte) bool {
+	if len(body) == 0 || len(body) > prettyLimit {
+		return false
+	}
+	return json.Valid(body)
+}
+
+func prettyJSON(body []byte) string {
+	var out bytes.Buffer
+	if err := json.Indent(&out, body, "", "  "); err != nil {
+		return string(body)
+	}
+	return out.String()
+}
+
+// counted keeps the plural honest, because "1 attempts" reads like a bug.
+func counted(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	if strings.HasSuffix(noun, "y") {
+		return fmt.Sprintf("%d %sies", n, strings.TrimSuffix(noun, "y"))
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func stamp(at time.Time) string {
+	if at.IsZero() {
+		return "—"
+	}
+	return at.Local().Format("2006-01-02 15:04:05")
+}
+
+// day is the date alone, for columns where the second something happened is
+// not what anyone is reading.
+func day(at time.Time) string {
+	if at.IsZero() {
+		return "—"
+	}
+	return at.Local().Format("2006-01-02")
+}
+
+func localTime(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.Local().Format("2006-01-02T15:04")
+}

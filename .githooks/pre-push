@@ -1,5 +1,4 @@
 #!/bin/sh
-# Refuse to push directly to a protected branch.
 set -eu
 
 while read -r _local_ref _local_sha remote_ref _remote_sha; do

@@ -1,0 +1,309 @@
+package web
+
+import (
+	"github.com/google/uuid"
+
+	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/postgres"
+)
+
+templ operatorsPage(operators []console.Operator, admins []console.Operator, roles []authz.Role) {
+	<div id="operators">
+		@settingsNav("/operators")
+		<h1>Operators</h1>
+
+		<table>
+			<thead>
+				<tr><th>email</th><th>signs in with</th><th>added</th><th>role</th></tr>
+			</thead>
+			<tbody>
+				for _, operator := range operators {
+					<tr>
+						<td><strong>{ operator.Email }</strong></td>
+						<td>
+							if operator.SignsInWithSingleSignOn() {
+								<span class="pill">single sign-on</span>
+							} else {
+								<span class="muted">a password</span>
+							}
+						</td>
+						<td class="muted">{ day(operator.CreatedAt) }</td>
+						<td>
+							if may(ctx, authz.OperatorsWrite) {
+								<form hx-post={ "/operators/" + operator.ID.String() + "/role" }
+										hx-target="#operators" hx-select="#operators" hx-swap="outerHTML">
+									<select name="role">
+										for _, role := range roles {
+											if role.Name == operator.Role {
+												<option value={ role.Name } selected>{ role.Name }</option>
+											} else {
+												<option value={ role.Name }>{ role.Name }</option>
+											}
+										}
+									</select>
+									<button>save</button>
+									<button hx-post={ "/operators/" + operator.ID.String() + "/delete" }
+											hx-target="#operators" hx-select="#operators" hx-swap="outerHTML"
+											hx-confirm="Take this operator out of this tenant? The account itself is kept, along with any other tenant it belongs to.">remove</button>
+								</form>
+							} else {
+								<span class="pill">{ operator.Role }</span>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		if may(ctx, authz.OperatorsWrite) {
+			<section>
+				<h2>Add an operator</h2>
+				<form class="filters" hx-post="/operators"
+						hx-target="#operators" hx-select="#operators" hx-swap="outerHTML">
+					<input type="email" name="email" placeholder="email" size="28" required/>
+					<select name="role">
+						for _, role := range roles {
+							<option value={ role.Name }>{ role.Name }</option>
+						}
+					</select>
+					<input type="password" name="password" placeholder="password" size="24" required/>
+					<button>add</button>
+				</form>
+				<p class="muted">
+					Somebody arriving through single sign-on does not need to be added
+					here. Their account is made the first time they sign in, with the
+					role their group is given on the roles page.
+				</p>
+			</section>
+		}
+		if acting(ctx).System {
+			<section>
+				<h2>System administrators</h2>
+				<p class="muted">
+					These accounts belong to no tenant. They may do anything the code
+					checks, in any tenant, one at a time. Only another one grants or
+					revokes the standing, and the first is made with
+					<code>charon user superadmin</code>.
+				</p>
+				<table>
+					<thead>
+						<tr><th>email</th><th>signs in with</th><th>added</th><th></th></tr>
+					</thead>
+					<tbody>
+						for _, admin := range admins {
+							<tr>
+								<td><strong>{ admin.Email }</strong></td>
+								<td>
+									if admin.SignsInWithSingleSignOn() {
+										<span class="pill">single sign-on</span>
+									} else {
+										<span class="muted">a password</span>
+									}
+								</td>
+								<td class="muted">{ day(admin.CreatedAt) }</td>
+								<td>
+									<form hx-post={ "/operators/" + admin.ID.String() + "/system" }
+											hx-target="#operators" hx-select="#operators" hx-swap="outerHTML">
+										<select name="role">
+											for _, role := range roles {
+												<option value={ role.Name }>{ role.Name }</option>
+											}
+										</select>
+										<button hx-confirm="Give the standing up and belong to this tenant instead?">
+											move into this tenant
+										</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+			<section>
+				<h2>Make a system administrator</h2>
+				<form class="filters" hx-post="/operators/system"
+						hx-target="#operators" hx-select="#operators" hx-swap="outerHTML">
+					<select name="id">
+						for _, operator := range operators {
+							<option value={ operator.ID.String() }>{ operator.Email }</option>
+						}
+					</select>
+					<input type="hidden" name="system" value="on"/>
+					<button hx-confirm="This account leaves its tenant and reaches every one of them. Continue?">
+						make
+					</button>
+				</form>
+			</section>
+		}
+	</div>
+}
+
+templ rolesPage(roles []authz.Role, pointed []console.Mapping, methods []string) {
+	<div id="roles">
+		@settingsNav("/roles")
+		<h1>Roles</h1>
+		<table>
+			<thead>
+				<tr><th>role</th><th>may</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, role := range roles {
+					<tr>
+						<td>
+							<strong>{ role.Name }</strong>
+							if role.BuiltIn {
+								<span class="pill">shipped</span>
+							}
+							<br/>
+							<span class="muted">{ role.Description }</span>
+						</td>
+						<td class="wrap">
+							for _, granted := range role.Grants {
+								<span class="pill">{ string(granted) }</span>
+							}
+						</td>
+						<td>
+							if may(ctx, authz.RolesWrite) && !role.BuiltIn {
+								<button hx-post={ "/roles/" + role.Name + "/delete" }
+										hx-target="#roles" hx-select="#roles" hx-swap="outerHTML"
+										hx-confirm="Remove this role? Operators holding it keep it until it is changed.">remove</button>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		if may(ctx, authz.RolesWrite) {
+			<section>
+				<h2>Values that arrive from single sign-on</h2>
+				<p class="muted">
+					A value whose name is this tenant's — on its own, or as the first
+					part of a path like <code>/{ tenantSlug(ctx) }/operator</code> —
+					places somebody here without anything being written down. List a
+					value below only when the provider names its groups its own way.
+				</p>
+				if len(pointed) > 0 {
+					<table>
+						<thead>
+							<tr><th>value</th><th>arrives as</th><th>through</th><th></th></tr>
+						</thead>
+						<tbody>
+							for _, one := range pointed {
+								<tr>
+									<td><strong>{ one.Claim }</strong></td>
+									<td>
+										if one.Role == "" {
+											<span class="muted">the least</span>
+										} else {
+											<span class="pill">{ one.Role }</span>
+										}
+									</td>
+									<td class="muted">{ one.Method }</td>
+									<td>
+										<button hx-post={ "/values/" + one.Method + "/" + one.Claim + "/delete" }
+												hx-target="#roles" hx-select="#roles" hx-swap="outerHTML"
+												hx-confirm="Stop pointing this value here? Whoever arrived through it loses this tenant at their next sign-in.">remove</button>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+				<form class="filters" hx-post="/values"
+						hx-target="#roles" hx-select="#roles" hx-swap="outerHTML">
+					<input type="text" name="value" placeholder="the value the provider sends" size="34" required/>
+					<select name="role">
+						<option value="">the least</option>
+						for _, role := range roles {
+							<option value={ role.Name }>{ role.Name }</option>
+						}
+					</select>
+					<select name="method">
+						for _, method := range methods {
+							<option value={ method }>{ method }</option>
+						}
+					</select>
+					<button>point here</button>
+				</form>
+			</section>
+			<section>
+				<h2>Define a role</h2>
+				<form class="stack" hx-post="/roles" hx-target="#roles" hx-select="#roles" hx-swap="outerHTML">
+					<p class="filters">
+						<input type="text" name="name" placeholder="role name" size="18" required/>
+						<input type="text" name="description" placeholder="what it is for" size="40"/>
+						<button>save</button>
+					</p>
+					for _, group := range authz.Grouped() {
+						<p class="grants">
+							<span class="area">{ group.Area }</span>
+							for _, permission := range group.Permissions {
+								<label title={ authz.Described()[permission] }>
+									<input type="checkbox" name="grant" value={ string(permission) }/>
+									{ permission.Action() }
+								</label>
+							}
+						</p>
+					}
+				</form>
+				<p class="muted">
+					Saving a role that already exists replaces exactly what it grants. A
+					shipped role can be changed but not removed.
+				</p>
+			</section>
+		}
+	</div>
+}
+
+templ tenantsPage(tenants []console.Tenant, current uuid.UUID, isolation postgres.Isolation) {
+	<div id="tenants">
+		@settingsNav("/tenants")
+		<h1>Tenants</h1>
+		<table>
+			<thead>
+				<tr><th>slug</th><th>name</th><th>webhook address</th><th>added</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, tenant := range tenants {
+					<tr>
+						<td>
+							<strong>{ tenant.Slug }</strong>
+							if tenant.ID == current {
+								<span class="pill">this one</span>
+							}
+						</td>
+						<td>{ tenant.Name }</td>
+						<td class="muted">/webhooks/{ tenant.Slug }/{ "{provider}" }</td>
+						<td class="muted">{ day(tenant.CreatedAt) }</td>
+						<td>
+							if tenant.ID != current {
+								<button hx-post={ "/tenants/" + tenant.Slug + "/delete" }
+										hx-target="#tenants" hx-select="#tenants" hx-swap="outerHTML"
+										hx-confirm="Remove this tenant? Everything recorded for it goes with it.">remove</button>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<section>
+			<h2>Add a tenant</h2>
+			<form class="filters" hx-post="/tenants" hx-target="#tenants" hx-select="#tenants" hx-swap="outerHTML">
+				<input type="text" name="slug" placeholder="slug, used in the webhook address" size="28" required/>
+				<input type="text" name="name" placeholder="display name" size="28"/>
+				<button>create</button>
+			</form>
+			<p class="muted">
+				A new tenant gets the shipped roles at once, and its own webhook address.
+				Everything recorded belongs to one tenant and is only ever read inside it.
+			</p>
+			if !isolation.Enforced {
+				<p class="muted">
+					That separation is kept by Charon. The database can be made to keep it
+					as well, by connecting as a role without <code>bypassrls</code>, which
+					refuses another tenant's rows whatever a query asks for.
+				</p>
+			}
+		</section>
+	</div>
+}

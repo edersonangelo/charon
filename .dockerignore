@@ -1,0 +1,14 @@
+.git
+.github
+.githooks
+.local
+bin
+dist
+*.md
+!go.mod
+LICENSE
+NOTICE
+docker-compose.yml
+Dockerfile
+.dockerignore
+contrib

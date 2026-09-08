@@ -1,0 +1,54 @@
+package web
+
+import "github.com/edersonangelo/charon/internal/authz"
+
+// area is one thing a deployment configures, and the permission that opens it.
+type area struct {
+	Path    string
+	Name    string
+	Needs   authz.Permission
+	Purpose string
+}
+
+func areas() []area {
+	return []area{
+		{"/routes", "routes", authz.RoutesRead,
+			"where each provider's events are delivered"},
+		{"/verification", "verification", authz.VerificationRead,
+			"how a provider's signature is checked before anything is delivered"},
+		{"/operators", "operators", authz.OperatorsRead,
+			"who can sign in, and as what"},
+		{"/roles", "roles", authz.OperatorsRead,
+			"what a role may do, and which groups arrive from single sign-on"},
+		{"/tenants", "tenants", authz.TenantsWrite,
+			"the tenants events are recorded for, each with its own address"},
+	}
+}
+
+templ settingsPage() {
+	<h1>Settings</h1>
+	<dl class="areas">
+		for _, one := range areas() {
+			if may(ctx, one.Needs) {
+				<dt><a href={ templ.SafeURL(one.Path) }>{ one.Name }</a></dt>
+				<dd class="muted">{ one.Purpose }</dd>
+			}
+		}
+	</dl>
+}
+
+// settingsNav is on every page under settings, so moving between them does not
+// mean going back first.
+templ settingsNav(current string) {
+	<nav class="areas">
+		for _, one := range areas() {
+			if may(ctx, one.Needs) {
+				if one.Path == current {
+					<a href={ templ.SafeURL(one.Path) } class="at">{ one.Name }</a>
+				} else {
+					<a href={ templ.SafeURL(one.Path) } class="muted">{ one.Name }</a>
+				}
+			}
+		}
+	</nav>
+}

@@ -1,11 +1,5 @@
 #!/bin/sh
-# Validate a pull request title against Conventional Commits.
-#
-# Pull requests are squash-merged, so the title becomes the commit message on
-# develop. It is the only text that reaches history, which is why it is the one
-# thing enforced.
-#
-# Usage: scripts/check-pr-title.sh "feat(ingest): store raw payload"
+# Usage: scripts/check-pr-title.sh "feat(ingest): record inbound webhooks"
 set -eu
 
 title="${1:-}"
