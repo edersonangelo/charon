@@ -4,6 +4,9 @@ services:
       context: .
       args:
         VERSION: dev
+    env_file:
+      - path: .env
+        required: false
     environment:
       CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
       CHARON_ADDR: ":8080"
@@ -32,6 +35,9 @@ services:
       args:
         VERSION: dev
     command: ["dispatch"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       CHARON_DATABASE_URL: postgres://charon:charon@postgres:5432/charon?sslmode=disable
       CHARON_LOG_LEVEL: debug
