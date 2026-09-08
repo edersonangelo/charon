@@ -81,6 +81,7 @@ stopped without touching the port that receives.
 | `-max-attempts` | `12` | attempts before a delivery is dead lettered |
 | `-backoff-base` | `5s` | first retry window |
 | `-backoff-cap` | `1h` | largest retry window |
+| `-max-response-bytes` | `16384` | how much of what a destination says back is kept on the attempt |
 | `-purge-every` | `1h` | how often to discard events past what their tenant keeps |
 
 It does not poll on a fixed interval. A recorded event announces itself on
@@ -91,6 +92,16 @@ replay, a route enabled by hand, a lease that expired.
 
 Retries are exponential with jitter, from `-backoff-base` up to `-backoff-cap`.
 At `-max-attempts` the delivery is dead, which is never counted as delivered.
+
+What a destination answers is kept on the attempt and shown on the event page.
+A status code is usually the whole answer, and cannot be counted on to be: a
+rejection carries a reason, a validation failure carries which field, a queue
+carries the identifier it filed the thing under. A number on its own leaves
+nobody able to act.
+
+It is a diagnostic and not an archive, so `-max-response-bytes` bounds it and
+what was cut says so on the page. Nothing about the answer is interpreted —
+only the status decides whether a delivery is done.
 
 ## route
 

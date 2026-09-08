@@ -314,7 +314,7 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 					<div class="scroll attempts">
 						<table>
 							<thead>
-								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>signed with</th><th>error</th></tr>
+								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>signed with</th><th>error</th><th>answer</th></tr>
 							</thead>
 							<tbody>
 								for _, attempt := range round.Attempts {
@@ -340,6 +340,7 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 											}
 										</td>
 										<td class="wrap">{ attempt.Error }</td>
+										<td class="wrap">@answered(attempt)</td>
 									</tr>
 								}
 							</tbody>
@@ -678,6 +679,25 @@ templ signingState(secrets []console.SigningSecret) {
 	}
 }
 
+// What the destination said back. A status code is usually the whole answer,
+// so most of these are empty and say so quietly rather than taking room.
+templ answered(attempt console.Attempt) {
+	if len(attempt.Answer) == 0 {
+		<span class="muted">—</span>
+	} else {
+		<details>
+			<summary>{ fmt.Sprintf("%d bytes", len(attempt.Answer)) }</summary>
+			if attempt.AnswerType != "" {
+				<div class="muted">{ attempt.AnswerType }</div>
+			}
+			<pre>{ readable(attempt.Answer) }</pre>
+			if attempt.AnswerTruncated {
+				<p class="muted">Cut at the limit this deployment keeps; the rest was not stored.</p>
+			}
+		</details>
+	}
+}
+
 // Bodies are stored verbatim and shown verbatim. Indenting here is a reading
 // aid over a copy, and the original is one click away.
 const prettyLimit = 256 << 10
@@ -687,6 +707,15 @@ func isJSON(body []byte) bool {
 		return false
 	}
 	return json.Valid(body)
+}
+
+// readable shows an answer the way the body of a request is shown: verbatim,
+// indented only when that is a reading aid.
+func readable(answer []byte) string {
+	if isJSON(answer) {
+		return prettyJSON(answer)
+	}
+	return string(answer)
 }
 
 func prettyJSON(body []byte) string {

@@ -220,7 +220,8 @@ func (q *Queries) DeleteRoute(ctx context.Context, arg DeleteRouteParams) error 
 }
 
 const deliveryAttempts = `-- name: DeliveryAttempts :many
-select round, attempt, attempted_at, status, error, duration_ms, signed_with, forced
+select round, attempt, attempted_at, status, error, duration_ms, signed_with, forced,
+       response, response_type, response_truncated
 from delivery_attempt
 where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc
@@ -232,14 +233,17 @@ type DeliveryAttemptsParams struct {
 }
 
 type DeliveryAttemptsRow struct {
-	Round       int32
-	Attempt     int32
-	AttemptedAt time.Time
-	Status      pgtype.Int4
-	Error       pgtype.Text
-	DurationMs  int32
-	SignedWith  string
-	Forced      bool
+	Round             int32
+	Attempt           int32
+	AttemptedAt       time.Time
+	Status            pgtype.Int4
+	Error             pgtype.Text
+	DurationMs        int32
+	SignedWith        string
+	Forced            bool
+	Response          []byte
+	ResponseType      string
+	ResponseTruncated bool
 }
 
 func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error) {
@@ -260,6 +264,9 @@ func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsPara
 			&i.DurationMs,
 			&i.SignedWith,
 			&i.Forced,
+			&i.Response,
+			&i.ResponseType,
+			&i.ResponseTruncated,
 		); err != nil {
 			return nil, err
 		}
@@ -966,20 +973,27 @@ func (q *Queries) ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlrea
 }
 
 const recordDeliveryAttempt = `-- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with, forced)
+insert into delivery_attempt (
+    tenant_id, delivery_id, attempt, round, status, error, duration_ms,
+    signed_with, forced, response, response_type, response_truncated
+)
 select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6,
-       (select e.override_id is not null from inbound_event e where e.id = d.event_id)
+       (select e.override_id is not null from inbound_event e where e.id = d.event_id),
+       $7, $8, $9
 from delivery d
 where d.id = $1
 `
 
 type RecordDeliveryAttemptParams struct {
-	DeliveryID uuid.UUID
-	Attempt    int32
-	Status     pgtype.Int4
-	Error      pgtype.Text
-	DurationMs int32
-	SignedWith string
+	DeliveryID        uuid.UUID
+	Attempt           int32
+	Status            pgtype.Int4
+	Error             pgtype.Text
+	DurationMs        int32
+	SignedWith        string
+	Response          []byte
+	ResponseType      string
+	ResponseTruncated bool
 }
 
 func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error {
@@ -990,6 +1004,9 @@ func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryA
 		arg.Error,
 		arg.DurationMs,
 		arg.SignedWith,
+		arg.Response,
+		arg.ResponseType,
+		arg.ResponseTruncated,
 	)
 	return err
 }

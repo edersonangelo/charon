@@ -35,6 +35,8 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	maxAttempts := fs.Int("max-attempts", 12, "attempts before a delivery is dead lettered")
 	backoffBase := fs.Duration("backoff-base", 5*time.Second, "first retry window")
 	backoffCap := fs.Duration("backoff-cap", time.Hour, "largest retry window")
+	maxResponse := fs.Int64("max-response-bytes", delivery.DefaultMaxResponseBytes,
+		"how much of what a destination says back is kept on the attempt")
 	purgeEvery := fs.Duration("purge-every", time.Hour,
 		"how often to discard events past what their tenant keeps")
 
@@ -54,14 +56,15 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	defer store.Close()
 
 	dispatcher := delivery.New(store, delivery.Config{
-		Workers:        *workers,
-		BatchSize:      *batchSize,
-		SafetyInterval: *safetyInterval,
-		RequestTimeout: *requestTimeout,
-		MaxAttempts:    *maxAttempts,
-		BackoffBase:    *backoffBase,
-		BackoffCap:     *backoffCap,
-		Logger:         logger,
+		Workers:          *workers,
+		BatchSize:        *batchSize,
+		SafetyInterval:   *safetyInterval,
+		RequestTimeout:   *requestTimeout,
+		MaxResponseBytes: *maxResponse,
+		MaxAttempts:      *maxAttempts,
+		BackoffBase:      *backoffBase,
+		BackoffCap:       *backoffCap,
+		Logger:           logger,
 	})
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)

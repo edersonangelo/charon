@@ -192,6 +192,11 @@ type Attempt struct {
 	// Forced says the event's signature had failed and somebody decided it
 	// should go anyway.
 	Forced bool
+	// Answer is what the destination said back. A status code is usually the
+	// whole of it and cannot be counted on to be.
+	Answer          []byte
+	AnswerType      string
+	AnswerTruncated bool
 }
 
 type RouteRow struct {

@@ -27,6 +27,10 @@ type Build func(Options) (outbound.Transport, error)
 type Options struct {
 	RequestTimeout time.Duration
 	Client         *http.Client
+	// MaxResponseBytes is how much of what a destination says back is kept.
+	// It is a diagnostic, not an archive, so it is bounded and says when it
+	// was cut.
+	MaxResponseBytes int64
 }
 
 // Transports maps a kind of destination to the code that talks to it.
@@ -93,9 +97,14 @@ func (r refusing) Send(context.Context, outbound.Delivery) outbound.Result {
 }
 
 type httpTransport struct {
-	client  *http.Client
-	timeout time.Duration
+	client   *http.Client
+	timeout  time.Duration
+	keepBack int64
 }
+
+// DefaultMaxResponseBytes is enough for a rejection to explain itself and far
+// short of anything worth storing per attempt.
+const DefaultMaxResponseBytes = 16 << 10
 
 func buildHTTP(options Options) (outbound.Transport, error) {
 	timeout := options.RequestTimeout
@@ -107,7 +116,12 @@ func buildHTTP(options Options) (outbound.Transport, error) {
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
-	return httpTransport{client: client, timeout: timeout}, nil
+
+	keepBack := options.MaxResponseBytes
+	if keepBack <= 0 {
+		keepBack = DefaultMaxResponseBytes
+	}
+	return httpTransport{client: client, timeout: timeout, keepBack: keepBack}, nil
 }
 
 func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) outbound.Result {
@@ -156,15 +170,35 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-
 	return outbound.Result{
 		Accepted:  resp.StatusCode >= 200 && resp.StatusCode < 300,
 		Status:    resp.StatusCode,
 		Detail:    fmt.Sprintf("destination answered %d", resp.StatusCode),
+		Answer:    t.answerOf(resp),
 		Signed:    delivery.Signing,
 		Retryable: true,
 	}
+}
+
+// A body that cannot be read is not a failed delivery: the destination already
+// said what it thought. It is recorded as no answer rather than turned into an
+// error about one.
+func (t httpTransport) answerOf(resp *http.Response) outbound.Answer {
+	kept, err := io.ReadAll(io.LimitReader(resp.Body, t.keepBack+1))
+	if err != nil {
+		return outbound.Answer{Type: resp.Header.Get("Content-Type")}
+	}
+
+	answer := outbound.Answer{Type: resp.Header.Get("Content-Type")}
+	if int64(len(kept)) > t.keepBack {
+		answer.Body = kept[:t.keepBack]
+		answer.Truncated = true
+		// Drained so the connection can be reused rather than dropped.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return answer
+	}
+	answer.Body = kept
+	return answer
 }
 
 func header(headers map[string][]string, name string) string {
