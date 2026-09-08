@@ -129,6 +129,11 @@ against the destination, and a backoff earned by a typo is not worth serving
 out. Saving without changing the address leaves the backoff alone, because a
 destination that is genuinely down has earned it.
 
+Switching a destination off pauses it. Nothing new is routed there, and what is
+already waiting keeps waiting with its attempts intact rather than being spent
+against somewhere deliberately taken out of service. Switching it back on
+delivers both what was held and everything that arrived meanwhile.
+
 A delivery that already reached the attempt limit is dead and stays dead; the
 resend button on the routes page is how that comes back.
 
