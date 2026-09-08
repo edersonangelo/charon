@@ -111,11 +111,70 @@ func PostgresDSN(tb testing.TB) string {
 		tb.Fatalf("creating database %s: %v", name, err)
 	}
 
-	dsn, err := withDatabase(adminDSN, name)
+	// The database is owned by an ordinary role, because every deployment has
+	// one: a managed Postgres does not hand out superuser. It matters here
+	// because a superuser is not subject to row level security at all, so a
+	// statement that reads nothing under a policy reads everything under a
+	// test, and a whole class of mistake becomes invisible.
+	role := "role_" + strings.TrimPrefix(name, "test_")
+	if _, err := conn.Exec(ctx, fmt.Sprintf(
+		// createrole, because a test that proves row level security confines
+		// somebody has to be able to make that somebody. It is not superuser
+		// and it does not bypass row level security, which is the whole point.
+		"create role %s login createrole password %s",
+		pgx.Identifier{role}.Sanitize(), quoted(role))); err != nil {
+		tb.Fatalf("creating role %s: %v", role, err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf("alter database %s owner to %s",
+		pgx.Identifier{name}.Sanitize(), pgx.Identifier{role}.Sanitize())); err != nil {
+		tb.Fatalf("giving %s to %s: %v", name, role, err)
+	}
+
+	adminHere, err := withDatabase(adminDSN, name)
 	if err != nil {
 		tb.Fatalf("%v", err)
 	}
-	return dsn
+	inside, err := pgx.Connect(ctx, adminHere)
+	if err != nil {
+		tb.Fatalf("connecting to %s: %v", name, err)
+	}
+	defer func() { _ = inside.Close(ctx) }()
+
+	// Owning the database is not owning what is in it, and since PostgreSQL 15
+	// the public schema is not writable by anyone else.
+	if _, err := inside.Exec(ctx, fmt.Sprintf("alter schema public owner to %s",
+		pgx.Identifier{role}.Sanitize())); err != nil {
+		tb.Fatalf("giving the schema of %s to %s: %v", name, role, err)
+	}
+
+	tb.Cleanup(func() {
+		clean, err := pgx.Connect(context.Background(), adminDSN)
+		if err != nil {
+			return
+		}
+		defer func() { _ = clean.Close(context.Background()) }()
+		_, _ = clean.Exec(context.Background(),
+			"drop database if exists "+pgx.Identifier{name}.Sanitize()+" with (force)")
+		_, _ = clean.Exec(context.Background(),
+			"drop role if exists "+pgx.Identifier{role}.Sanitize())
+	})
+
+	return asRole(adminHere, role)
+}
+
+// quoted is a string literal for a statement that cannot take a parameter,
+// which create role is.
+func quoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func asRole(dsn, role string) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	parsed.User = url.UserPassword(role, role)
+	return parsed.String()
 }
 
 func withDatabase(dsn, database string) (string, error) {
