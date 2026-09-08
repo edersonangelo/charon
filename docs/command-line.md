@@ -161,9 +161,21 @@ A preset supplies the parameters and anything given explicitly wins over it, so
 a provider that is almost Stripe is a preset and one flag. Settings that cannot
 build are refused here rather than silently refusing every request later.
 
-`recheck` runs verification again over the requests of a provider that were
-recorded invalid or missing, and reopens the ones that now pass. It is the way
-back from a secret that was configured wrong.
+Configuring verification checks what is already recorded, on its own. A request
+that arrived before any settings existed is `unchecked` — the absence of a
+verdict rather than one — so the moment the settings arrive, the question
+becomes askable and is asked. Nothing has to be run by hand for that.
+
+`recheck` does the same on demand, for a provider, and is the way back from a
+secret that was configured wrong: what now passes is reopened for delivery.
+
+```sh
+charon verify recheck -provider stripe
+```
+
+Neither touches a request that was already delivered. It keeps the answer it
+went out with, because saying now that it was never signed would claim it had
+been held back, and it was not.
 
 ## sign
 

@@ -80,6 +80,7 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
 	go verification.Watch(watching)
+	go checkWhatArrivedBefore(watching, store, logger)
 	go forgetTenantsOnChange(watching, store)
 
 	mux := http.NewServeMux()
@@ -115,6 +116,43 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 // Isolation between tenants is enforced by row level security, and Postgres
+// How many requests one change to a provider's settings looks back over. It is
+// a limit on work, not on correctness: what is past it is still there, and the
+// command line reaches it.
+const reconsiderBatch = 500
+
+// Configuring verification answers a question that was open for everything
+// already recorded under that provider. Nobody should have to ask for that
+// answer afterwards: the same announcement that rebuilds the verifiers runs it.
+func checkWhatArrivedBefore(
+	ctx context.Context, store *postgres.Store, logger *slog.Logger,
+) {
+	changes := store.ProviderChanges(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, open := <-changes:
+			if !open {
+				return
+			}
+			recovered, err := store.Reconsider(ctx, reconsiderBatch)
+			if err != nil {
+				if ctx.Err() == nil {
+					logger.ErrorContext(ctx,
+						"could not check what arrived before the settings", "error", err)
+				}
+				continue
+			}
+			if recovered > 0 {
+				logger.InfoContext(ctx,
+					"requests recorded before the settings now verify",
+					"reopened", recovered)
+			}
+		}
+	}
+}
+
 // Metrics get a listener of their own rather than a route on the main one.
 // What they report is every tenant's counts at once, and the main listener is
 // the one the internet posts webhooks to: an operational endpoint does not
