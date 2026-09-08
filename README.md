@@ -16,12 +16,16 @@
 
 ## Status
 
-Pre-alpha. Ingestion, delivery, signature verification and the operator panel
-work: Charon accepts a webhook, checks its signature, records it durably,
-acknowledges it only after that record is committed, then delivers it to the
-destinations routed for its provider, retrying with backoff until the
-destination answers `2xx` or the attempt limit is reached. Every event and
-every attempt is searchable and replayable from the panel.
+First release. Charon accepts a webhook, checks its signature, records it
+durably, acknowledges it only after that record is committed, then delivers it
+to the destinations routed for its provider — signed on the way out — retrying
+with backoff until the destination answers `2xx` or the attempt limit is
+reached. Every event and every attempt is searchable and replayable from the
+panel, per tenant, by operators who sign in with your own identity provider.
+
+Young, and versioned accordingly: `0.x` means the shape of things can still
+change between minor versions, and anything that does will say so in the
+release notes.
 
 ## Requirements
 
@@ -84,12 +88,19 @@ export CHARON_DATABASE_URL='postgres://charon:charon@localhost:5434/charon?sslmo
 ./bin/charon serve
 ```
 
-Binary releases and `go install` support arrive at `v0.1.0`.
+Or without cloning anything:
+
+```sh
+go install github.com/edersonangelo/charon/cmd/charon@latest
+```
+
+Binaries for linux and macOS, on both architectures, are attached to every
+[release](https://github.com/edersonangelo/charon/releases).
 
 ## Install
 
 ```sh
-docker pull edersomangelo/charon:alpha
+docker pull edersomangelo/charon:latest
 ```
 
 `linux/amd64` and `linux/arm64`, built from `scratch`, running as uid `65534`.

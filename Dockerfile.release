@@ -1,0 +1,17 @@
+# The release image takes the binary the build already produced, one per
+# platform, rather than compiling again inside a layer. Same result as the
+# Dockerfile beside it, reached the way the release tooling lays things out.
+FROM scratch
+
+ARG TARGETOS
+ARG TARGETARCH
+
+COPY ca-certificates.crt /etc/ssl/certs/
+COPY ${TARGETOS}/${TARGETARCH}/charon /charon
+
+USER 65534:65534
+
+EXPOSE 8080
+
+ENTRYPOINT ["/charon"]
+CMD ["serve"]

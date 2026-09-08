@@ -1,0 +1,82 @@
+version: 2
+
+# The version is the tag and nothing else: there is no file to bump, and
+# main.version is what the build already reads.
+project_name: charon
+
+before:
+  hooks:
+    - go mod download
+    # The image is built from scratch, so the trust store comes from the
+    # machine doing the release rather than from a base image or from a copy
+    # of somebody's bundle committed here.
+    - sh -c 'for f in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem; do [ -f "$f" ] && exec cp "$f" ca-certificates.crt; done; echo "no trust store found on this machine" >&2; exit 1'
+
+
+builds:
+  - id: charon
+    main: ./cmd/charon
+    binary: charon
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - docs/*
+
+checksum:
+  name_template: checksums.txt
+
+# One block, both architectures, and the manifest that joins them. A release
+# answers to its exact version, to the minor line, and — only when it is not a
+# pre-release — to latest.
+dockers_v2:
+  - images:
+      - edersomangelo/charon
+    tags:
+      - "{{ .Version }}"
+      - "{{ .Major }}.{{ .Minor }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    dockerfile: Dockerfile.release
+    extra_files:
+      - ca-certificates.crt
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Added
+      regexp: '^feat'
+      order: 0
+    - title: Fixed
+      regexp: '^fix'
+      order: 1
+    - title: Documentation
+      regexp: '^docs'
+      order: 2
+    - title: Everything else
+      order: 3
+  filters:
+    exclude:
+      - '^chore\(deps\)'
+      - '^Merge '
+
+release:
+  # A pre-release says so on its own page rather than in a note nobody reads.
+  prerelease: auto
+  footer: |
+    Container image: `docker pull edersomangelo/charon:{{ .Version }}`
