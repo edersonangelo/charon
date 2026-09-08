@@ -21,8 +21,7 @@ work: Charon accepts a webhook, checks its signature, records it durably,
 acknowledges it only after that record is committed, then delivers it to the
 destinations routed for its provider, retrying with backoff until the
 destination answers `2xx` or the attempt limit is reached. Every event and
-every attempt is searchable and replayable from the panel. See
-[Roadmap](#roadmap).
+every attempt is searchable and replayable from the panel.
 
 ## Requirements
 
@@ -85,8 +84,19 @@ export CHARON_DATABASE_URL='postgres://charon:charon@localhost:5434/charon?sslmo
 ./bin/charon serve
 ```
 
-Binary releases, a published container image and `go install` support arrive at
-`v0.1.0`.
+Binary releases and `go install` support arrive at `v0.1.0`.
+
+## Install
+
+```sh
+docker pull edersomangelo/charon:alpha
+```
+
+`linux/amd64` and `linux/arm64`, built from `scratch`, running as uid `65534`.
+PostgreSQL 18 is yours to provide.
+
+Running it standalone or under Kubernetes, and what each tag promises, are in
+**[docs/install.md](docs/install.md)**.
 
 ## Commands
 
@@ -373,22 +383,9 @@ Events are kept for ever until a tenant says otherwise. `charon retention set
 -tenant acme -days 90` says otherwise, and `charon dispatch` discards what is
 past it every hour — never an event whose delivery is still pending.
 
-## Roadmap
-
-| Phase | Scope | Status |
-|---|---|---|
-| 0 | Build, lint and test gate | done |
-| 1 | Durable ingestion | done |
-| 2 | Delivery loop: claim, retry, backoff, dead letter | done |
-| 3 | Operator panel: search, inspect, replay | done |
-| 4 | Signature verification | done |
-| 5 | Multiple tenants, configurable roles, administration in the panel | done |
-| 6 | Signing what is delivered | done |
-| 7 | Retention and purge, metrics | done |
-| 8 | `v0.1.0` release | |
-
 ## Documentation
 
+- [docs/install.md](docs/install.md) — the published image, its tags, and running it standalone or under Kubernetes
 - [docs/command-line.md](docs/command-line.md) — every command and flag, and why each one is there
 - [docs/single-sign-on.md](docs/single-sign-on.md) — connecting an identity provider, and how it decides who lands where
 - [docs/signing.md](docs/signing.md) — proving a delivery came from Charon, and verifying it on the receiving side
