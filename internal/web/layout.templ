@@ -72,6 +72,16 @@ templ layout(title string, user string, summary Summary) {
 				        font-size: .8rem; margin-left: .4rem; white-space: nowrap }
 				.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }
 				.pill.good { color: #2a7 } .pill.bad { color: #d44 }
+				details.actions { display: inline-block; position: relative }
+				details.actions > summary { list-style: none; cursor: pointer;
+				                            padding: .15rem .5rem; border: 1px solid var(--line);
+				                            border-radius: 3px; font-size: .9rem }
+				details.actions > summary::-webkit-details-marker { display: none }
+				details.actions > div { position: absolute; right: 0; z-index: 5; width: 34rem;
+				                        margin-top: .35rem; padding: .75rem;
+				                        border: 1px solid var(--line); border-radius: 4px;
+				                        background: Canvas }
+				details.actions p { margin: .5rem 0 0 }
 				.signing { display: flex; align-items: baseline; gap: .35rem;
 				           font-size: .85rem; white-space: nowrap }
 				.signing + .signing { margin-top: .2rem }
