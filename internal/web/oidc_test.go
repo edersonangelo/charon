@@ -31,6 +31,11 @@ func withSSO(t *testing.T, policy auth.Policy) (*postgres.Store, *httptest.Serve
 	if _, err := store.Migrate(ctx); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
+	// Serving does this on every start, and what it records is what decides
+	// whether an operator may do anything at all.
+	if err := store.Register(ctx, postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
+	}
 
 	idp := testsupport.NewIdentityProvider(t)
 
@@ -294,6 +299,11 @@ func TestTheTenantClaimIsWhateverTheProviderCallsIt(t *testing.T) {
 	if _, err := store.Migrate(ctx); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
+	// Serving does this on every start, and what it records is what decides
+	// whether an operator may do anything at all.
+	if err := store.Register(ctx, postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
+	}
 
 	idp := testsupport.NewIdentityProvider(t)
 	idp.TenantClaim = claim
@@ -350,6 +360,11 @@ func TestATenantClaimCanBeNested(t *testing.T) {
 	t.Cleanup(store.Close)
 	if _, err := store.Migrate(ctx); err != nil {
 		t.Fatalf("migrating: %v", err)
+	}
+	// Serving does this on every start, and what it records is what decides
+	// whether an operator may do anything at all.
+	if err := store.Register(ctx, postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
 	}
 
 	idp := testsupport.NewIdentityProvider(t)

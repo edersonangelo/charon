@@ -46,6 +46,11 @@ func setup(t *testing.T) (*postgres.Store, *httptest.Server, *http.Client, uuid.
 	if _, err := store.Migrate(ctx); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
+	// Serving does this on every start, and what it records is what decides
+	// whether an operator may do anything at all.
+	if err := store.Register(ctx, postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
+	}
 
 	hash, err := console.HashPassword(password)
 	if err != nil {

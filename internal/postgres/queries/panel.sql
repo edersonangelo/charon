@@ -266,7 +266,13 @@ from role r
 left join role_grant g on g.role_id = r.id
 left join permission p on p.id = g.permission_id
 where (r.tenant_id is null or r.tenant_id = $1) and r.name = $2
-group by r.id, r.name, r.description, r.built_in;
+group by r.id, r.name, r.description, r.built_in
+-- A tenant may define a role of its own under a name Charon also ships, and
+-- changing a shipped role is how that happens. Its own wins, said here rather
+-- than left to whichever row the database hands back first: deciding what
+-- somebody may do cannot depend on that.
+order by (r.tenant_id is null)
+limit 1;
 
 -- name: SetRole :one
 insert into role (tenant_id, name, description)
@@ -398,3 +404,31 @@ from claim_placement p
 left join role r on r.id = p.role_id
 where p.tenant_id = $1
 order by p.method, p.value;
+
+-- name: RegisterPermission :exec
+insert into permission (name, description) values ($1, $2)
+on conflict (name) do update set description = excluded.description;
+
+-- name: RegisterDeliveryState :exec
+insert into delivery_state (name, description) values ($1, $2)
+on conflict (name) do nothing;
+
+-- name: RegisterSignatureState :exec
+insert into signature_state (name, description) values ($1, $2)
+on conflict (name) do nothing;
+
+-- A role Charon ships belongs to no tenant and is held in any. Its description
+-- is left alone once it exists, because a deployment is allowed to change it.
+-- name: RegisterShippedRole :one
+insert into role (tenant_id, name, description, built_in)
+values (null, $1, $2, true)
+on conflict (tenant_id, name) do update set built_in = true
+returning id;
+
+-- name: RegisterShippedGrant :exec
+insert into role_grant (role_id, permission_id)
+select $1, p.id from permission p where p.name = $2
+on conflict do nothing;
+
+-- name: RoleHasAnyGrant :one
+select exists (select 1 from role_grant where role_id = $1);
