@@ -36,13 +36,14 @@ delete from panel_session where token = $1;
 delete from panel_session where expires_at <= now();
 
 -- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with)
-select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with, forced)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6,
+       (select e.override_id is not null from inbound_event e where e.id = d.event_id)
 from delivery d
 where d.id = $1;
 
 -- name: DeliveryAttempts :many
-select round, attempt, attempted_at, status, error, duration_ms, signed_with
+select round, attempt, attempted_at, status, error, duration_ms, signed_with, forced
 from delivery_attempt
 where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc;
@@ -53,6 +54,7 @@ order by round desc, attempted_at desc;
 -- name: SearchEvents :many
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
+       (e.override_id is not null)::boolean as forced,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::bigint as deliveries,
        coalesce((select count(*) from delivery d where d.event_id = e.id and d.state = 'delivered'
@@ -432,3 +434,28 @@ on conflict do nothing;
 
 -- name: RoleHasAnyGrant :one
 select exists (select 1 from role_grant where role_id = $1);
+
+-- name: RecordOverride :one
+insert into signature_override (tenant_id, reason, decided_by)
+values ($1, $2, $3)
+returning id;
+
+-- An event is overruled once. Saying so twice is the same decision, not a new
+-- one, and the first is the one that let it out.
+-- name: OverrideEvents :execrows
+update inbound_event
+set override_id = $1, planned_at = null
+where tenant_id = $2
+  and id = any(sqlc.arg(ids)::uuid[])
+  and override_id is null
+  and signature in ('invalid', 'missing');
+
+-- name: OverruleOnEvent :one
+select o.reason, o.decided_at, u.email as decided_by
+from inbound_event e
+join signature_override o on o.id = e.override_id
+join panel_user u on u.id = o.decided_by
+where e.id = $1 and e.tenant_id = $2;
+
+-- name: EventsUnderOverride :many
+select id from inbound_event where override_id = $1 order by received_at;

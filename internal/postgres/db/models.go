@@ -52,6 +52,7 @@ type DeliveryAttempt struct {
 	Round       int32
 	TenantID    uuid.UUID
 	SignedWith  string
+	Forced      bool
 }
 
 type DeliveryState struct {
@@ -78,6 +79,7 @@ type InboundEvent struct {
 	PlannedAt  pgtype.Timestamptz
 	Signature  string
 	TenantID   uuid.UUID
+	OverrideID pgtype.UUID
 }
 
 type InboundRequest struct {
@@ -156,6 +158,14 @@ type Route struct {
 type SchemaMigration struct {
 	Name      string
 	AppliedAt time.Time
+}
+
+type SignatureOverride struct {
+	ID        uuid.UUID
+	TenantID  uuid.UUID
+	Reason    string
+	DecidedBy uuid.UUID
+	DecidedAt time.Time
 }
 
 type SignatureState struct {

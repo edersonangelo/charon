@@ -63,9 +63,13 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 		if len(events) == 0 {
 			<p class="muted">Nothing matches.</p>
 		} else {
+			<form method="post" action="/events/force">
 			<table>
 				<thead>
 					<tr>
+						if refusedAmong(events) && may(ctx, authz.EventsForce) {
+							<th></th>
+						}
 						<th>received</th>
 						<th>provider</th>
 						<th>size</th>
@@ -78,8 +82,15 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 						<tr data-open
 								hx-get={ "/events/" + event.ID.String() + "/fragment" }
 								hx-target="#detail-body" hx-swap="innerHTML">
+							if refusedAmong(events) && may(ctx, authz.EventsForce) {
+								<td onclick="event.stopPropagation()">
+									if refused(event) {
+										<input type="checkbox" name="event" value={ event.ID.String() }/>
+									}
+								</td>
+							}
 							<td>{ stamp(event.ReceivedAt) }</td>
-							<td>{ event.Provider }@signatureBadge(event.Signature)</td>
+							<td>{ event.Provider }@signatureBadge(event.Signature)@forcedBadge(event)</td>
 							<td>{ fmt.Sprintf("%d B", event.BodySize) }</td>
 							<td>@deliveryCounts(event)</td>
 							<td onclick="event.stopPropagation()">
@@ -95,9 +106,44 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 					}
 				</tbody>
 			</table>
+			if refusedAmong(events) && may(ctx, authz.EventsForce) {
+				<section class="attention">
+					<h2>Deliver one that did not verify</h2>
+					<p class="muted">
+						Tick what to send and say why. The signature is not rewritten: these stay
+						invalid or missing, and now also record who let them through. One reason
+						covers everything ticked.
+					</p>
+					<input type="text" name="reason" size="60" minlength="10" required
+							placeholder="why these are being delivered anyway"/>
+					<button>deliver anyway</button>
+				</section>
+			}
+			</form>
 			@pager(len(events), filter)
 		}
 	</div>
+}
+
+// Only a signature that was checked and failed can be overruled. Nothing that
+// was never checked needs it, and nothing that passed is being let past.
+func refused(event console.EventSummary) bool {
+	return event.Signature == "invalid" || event.Signature == "missing"
+}
+
+func refusedAmong(events []console.EventSummary) bool {
+	for _, event := range events {
+		if refused(event) && !event.Forced {
+			return true
+		}
+	}
+	return false
+}
+
+templ forcedBadge(event console.EventSummary) {
+	if event.Forced {
+		<span class="pill" title="delivered by an operator's decision despite the signature">forced</span>
+	}
 }
 
 templ deliveryCounts(event console.EventSummary) {
@@ -153,6 +199,17 @@ templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inMo
 		<table>
 			<tbody>
 				<tr><th>signature</th><td>@signatureBadge(event.Signature) @signatureNote(event.Signature)</td></tr>
+				if event.Overruled != nil {
+					<tr>
+						<th>delivered anyway</th>
+						<td>
+							<strong>{ event.Overruled.Reason }</strong>
+							<div class="muted">
+								{ event.Overruled.DecidedBy } · { stamp(event.Overruled.DecidedAt) }
+							</div>
+						</td>
+					</tr>
+				}
 				<tr><th>received</th><td>{ stamp(event.ReceivedAt) }</td></tr>
 				<tr><th>path</th><td>{ event.Path }</td></tr>
 				<tr><th>size</th><td>{ fmt.Sprintf("%d bytes", event.BodySize) }</td></tr>
@@ -273,6 +330,9 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 										</td>
 										<td>{ fmt.Sprintf("%d ms", attempt.DurationMs) }</td>
 										<td class="wrap">
+											if attempt.Forced {
+												<span class="pill bad" title="the signature failed and an operator had it sent">forced</span>
+											}
 											if attempt.SignedWith == "" {
 												<span class="muted">unsigned</span>
 											} else {

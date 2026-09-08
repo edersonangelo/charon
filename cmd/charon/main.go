@@ -21,6 +21,7 @@ Commands:
   dispatch  Deliver recorded events to their destinations
   route     Manage where a provider's events are delivered
   user      Create an operator who can sign in to the panel
+  events    Act on recorded events
   verify    Configure how a provider's signature is checked
   sign      Configure how deliveries leaving here are signed
   tenant    Manage the tenants events are recorded for
@@ -59,6 +60,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return route(ctx, rest, stdout, stderr)
 	case "user":
 		return user(ctx, rest, stdout, stderr)
+	case "events":
+		return events(ctx, rest, stdout, stderr)
 	case "verify":
 		return verify(ctx, rest, stdout, stderr)
 	case "sign":

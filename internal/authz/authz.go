@@ -26,6 +26,7 @@ type Permission string
 const (
 	EventsRead        Permission = "events.read"
 	EventsReplay      Permission = "events.replay"
+	EventsForce       Permission = "events.force"
 	RoutesRead        Permission = "routes.read"
 	RoutesWrite       Permission = "routes.write"
 	VerificationRead  Permission = "verification.read"
@@ -42,6 +43,7 @@ func Described() map[Permission]string {
 	return map[Permission]string{
 		EventsRead:        "search events and read what arrived and where it went",
 		EventsReplay:      "send a recorded event to its destinations again",
+		EventsForce:       "deliver an event whose signature failed, saying why",
 		RoutesRead:        "see where each provider's events are delivered",
 		RoutesWrite:       "add, change and remove routes and destinations",
 		VerificationRead:  "see how each provider's requests are checked",
@@ -182,7 +184,7 @@ func BuiltIn() []Role {
 		Description: "everything an operator can, and configure this tenant",
 		BuiltIn:     true,
 		Grants: append(slices.Clone(operator.Grants),
-			RoutesWrite, VerificationWrite, OperatorsWrite, RolesWrite),
+			EventsForce, RoutesWrite, VerificationWrite, OperatorsWrite, RolesWrite),
 	}
 
 	owner := Role{

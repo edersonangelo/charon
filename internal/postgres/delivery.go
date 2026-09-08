@@ -42,7 +42,8 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 	for _, event := range events {
 		// A signature that was checked and failed is settled here: recorded,
 		// visible, and never delivered anywhere.
-		if event.Signature == string(provider.Invalid) || event.Signature == string(provider.Missing) {
+		if !event.Overridden &&
+			(event.Signature == string(provider.Invalid) || event.Signature == string(provider.Missing)) {
 			if markErr := q.MarkEventPlanned(ctx, event.ID); markErr != nil {
 				return 0, fmt.Errorf("settling event %s: %w", event.ID, markErr)
 			}

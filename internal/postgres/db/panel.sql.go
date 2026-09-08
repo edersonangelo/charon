@@ -220,7 +220,7 @@ func (q *Queries) DeleteRoute(ctx context.Context, arg DeleteRouteParams) error 
 }
 
 const deliveryAttempts = `-- name: DeliveryAttempts :many
-select round, attempt, attempted_at, status, error, duration_ms, signed_with
+select round, attempt, attempted_at, status, error, duration_ms, signed_with, forced
 from delivery_attempt
 where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc
@@ -239,6 +239,7 @@ type DeliveryAttemptsRow struct {
 	Error       pgtype.Text
 	DurationMs  int32
 	SignedWith  string
+	Forced      bool
 }
 
 func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error) {
@@ -258,6 +259,7 @@ func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsPara
 			&i.Error,
 			&i.DurationMs,
 			&i.SignedWith,
+			&i.Forced,
 		); err != nil {
 			return nil, err
 		}
@@ -483,6 +485,30 @@ func (q *Queries) EventDetail(ctx context.Context, arg EventDetailParams) (Event
 	return i, err
 }
 
+const eventsUnderOverride = `-- name: EventsUnderOverride :many
+select id from inbound_event where override_id = $1 order by received_at
+`
+
+func (q *Queries) EventsUnderOverride(ctx context.Context, overrideID pgtype.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, eventsUnderOverride, overrideID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const grantPermission = `-- name: GrantPermission :exec
 insert into role_grant (role_id, permission_id)
 select $1, p.id from permission p where p.name = $2
@@ -676,6 +702,57 @@ select pg_notify('charon_panel', '')
 func (q *Queries) NotifyPanel(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, notifyPanel)
 	return err
+}
+
+const overrideEvents = `-- name: OverrideEvents :execrows
+update inbound_event
+set override_id = $1, planned_at = null
+where tenant_id = $2
+  and id = any($3::uuid[])
+  and override_id is null
+  and signature in ('invalid', 'missing')
+`
+
+type OverrideEventsParams struct {
+	OverrideID pgtype.UUID
+	TenantID   uuid.UUID
+	Ids        []uuid.UUID
+}
+
+// An event is overruled once. Saying so twice is the same decision, not a new
+// one, and the first is the one that let it out.
+func (q *Queries) OverrideEvents(ctx context.Context, arg OverrideEventsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, overrideEvents, arg.OverrideID, arg.TenantID, arg.Ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const overruleOnEvent = `-- name: OverruleOnEvent :one
+select o.reason, o.decided_at, u.email as decided_by
+from inbound_event e
+join signature_override o on o.id = e.override_id
+join panel_user u on u.id = o.decided_by
+where e.id = $1 and e.tenant_id = $2
+`
+
+type OverruleOnEventParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+type OverruleOnEventRow struct {
+	Reason    string
+	DecidedAt time.Time
+	DecidedBy string
+}
+
+func (q *Queries) OverruleOnEvent(ctx context.Context, arg OverruleOnEventParams) (OverruleOnEventRow, error) {
+	row := q.db.QueryRow(ctx, overruleOnEvent, arg.ID, arg.TenantID)
+	var i OverruleOnEventRow
+	err := row.Scan(&i.Reason, &i.DecidedAt, &i.DecidedBy)
+	return i, err
 }
 
 const panelSessionUser = `-- name: PanelSessionUser :one
@@ -889,8 +966,9 @@ func (q *Queries) ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlrea
 }
 
 const recordDeliveryAttempt = `-- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with)
-select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with, forced)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6,
+       (select e.override_id is not null from inbound_event e where e.id = d.event_id)
 from delivery d
 where d.id = $1
 `
@@ -914,6 +992,25 @@ func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryA
 		arg.SignedWith,
 	)
 	return err
+}
+
+const recordOverride = `-- name: RecordOverride :one
+insert into signature_override (tenant_id, reason, decided_by)
+values ($1, $2, $3)
+returning id
+`
+
+type RecordOverrideParams struct {
+	TenantID  uuid.UUID
+	Reason    string
+	DecidedBy uuid.UUID
+}
+
+func (q *Queries) RecordOverride(ctx context.Context, arg RecordOverrideParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, recordOverride, arg.TenantID, arg.Reason, arg.DecidedBy)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const registerAuthMethod = `-- name: RegisterAuthMethod :exec
@@ -1297,6 +1394,7 @@ func (q *Queries) RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByID
 const searchEvents = `-- name: SearchEvents :many
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
+       (e.override_id is not null)::boolean as forced,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and routed(e.provider, d.destination_id)), 0)::bigint as deliveries,
        coalesce((select count(*) from delivery d where d.event_id = e.id and d.state = 'delivered'
@@ -1354,6 +1452,7 @@ type SearchEventsRow struct {
 	BodySize   int32
 	Signature  string
 	Planned    bool
+	Forced     bool
 	Deliveries int64
 	Delivered  int64
 	Dead       int64
@@ -1392,6 +1491,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.BodySize,
 			&i.Signature,
 			&i.Planned,
+			&i.Forced,
 			&i.Deliveries,
 			&i.Delivered,
 			&i.Dead,
