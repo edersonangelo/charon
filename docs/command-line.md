@@ -12,6 +12,8 @@ charon verify     Configure how a provider's signature is checked
 charon sign       Configure how deliveries leaving here are signed
 charon tenant     Manage the tenants events are recorded for
 charon role       Manage roles and what they grant
+charon retention  How long each tenant's events are kept
+charon purge      Discard events past what their tenant keeps
 charon migrate    Apply pending schema migrations and exit
 charon version    Print the build version and exit
 ```
@@ -53,6 +55,7 @@ because they share the same database and the same lifetime.
 | `-session-ttl` | — | `12h` | how long an operator stays signed in |
 | `-secure-cookie` | — | off | mark the session cookie Secure; turn on behind HTTPS |
 | `-verification-refresh` | — | `1m` | longest the signature settings can be stale before being reloaded anyway |
+| `-metrics-addr` | `CHARON_METRICS_ADDR` | — | address to serve Prometheus metrics on; off when empty |
 
 The single sign-on flags live in
 **[docs/single-sign-on.md](single-sign-on.md)**, along with what a provider has
@@ -77,6 +80,7 @@ stopped without touching the port that receives.
 | `-max-attempts` | `12` | attempts before a delivery is dead lettered |
 | `-backoff-base` | `5s` | first retry window |
 | `-backoff-cap` | `1h` | largest retry window |
+| `-purge-every` | `1h` | how often to discard events past what their tenant keeps |
 
 It does not poll on a fixed interval. A recorded event announces itself on
 commit, so a new one is picked up at once, and between rounds the process sleeps
@@ -262,6 +266,42 @@ route in the panel checks, so the set is closed in the code and held as rows in
 the database. `charon role permissions` prints it with what each one allows.
 
 A role shipped with Charon can be changed but not removed.
+
+## retention
+
+How long a tenant's events are kept. Nothing is discarded until a tenant says
+so: a database that grows is a smaller problem than one that quietly threw away
+what somebody needed.
+
+```sh
+charon retention list
+charon retention set -tenant acme -days 90
+charon retention set -tenant acme -forever
+```
+
+| flag | purpose |
+|---|---|
+| `-tenant` | whose events these are |
+| `-days` | how many days to keep, between 1 and 3650 |
+| `-forever` | keep them all, which is where every tenant starts |
+
+Discarding an event takes its request body, its deliveries and their attempts
+with it, because none of them mean anything without it.
+
+## purge
+
+Applies what `retention` says. `charon dispatch` does this every hour on its
+own, so this is for a deployment that would rather run it as a job, or for
+seeing what would go.
+
+```sh
+charon purge -dry-run
+charon purge
+```
+
+An event with a delivery still `pending` is never discarded, whatever its age.
+A delivery that old means the destination has been unreachable for a long time,
+which is a reason to look at it rather than to erase the evidence.
 
 ## migrate
 

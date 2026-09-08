@@ -357,11 +357,21 @@ is doing.
 | `-session-ttl` | — | `12h` | How long a panel session lasts |
 | `-secure-cookie` | — | off | Mark the session cookie secure, for serving over HTTPS |
 | `-verification-refresh` | — | `1m` | How often verification settings are reloaded regardless of announcements |
+| `-metrics-addr` | `CHARON_METRICS_ADDR` | — | Address to serve Prometheus metrics on, off when empty |
 | `-tenant` | `CHARON_TENANT` | `default` | Tenant the command acts for, on every command but `serve` and `dispatch` |
 
 `GET /healthz` reports that the process is up. `GET /readyz` reports whether the
 database is reachable, which is the only thing that makes an instance worth
 sending traffic to.
+
+Metrics are served in the Prometheus format on a listener of their own, off
+until `-metrics-addr` names one — what a scrape reports is every tenant's
+counts, which does not belong on the port the internet posts webhooks to. See
+**[docs/metrics.md](docs/metrics.md)**.
+
+Events are kept for ever until a tenant says otherwise. `charon retention set
+-tenant acme -days 90` says otherwise, and `charon dispatch` discards what is
+past it every hour — never an event whose delivery is still pending.
 
 ## Roadmap
 
@@ -374,7 +384,7 @@ sending traffic to.
 | 4 | Signature verification | done |
 | 5 | Multiple tenants, configurable roles, administration in the panel | done |
 | 6 | Signing what is delivered | done |
-| 7 | Retention and purge, metrics | |
+| 7 | Retention and purge, metrics | done |
 | 8 | `v0.1.0` release | |
 
 ## Documentation
@@ -382,6 +392,7 @@ sending traffic to.
 - [docs/command-line.md](docs/command-line.md) — every command and flag, and why each one is there
 - [docs/single-sign-on.md](docs/single-sign-on.md) — connecting an identity provider, and how it decides who lands where
 - [docs/signing.md](docs/signing.md) — proving a delivery came from Charon, and verifying it on the receiving side
+- [docs/metrics.md](docs/metrics.md) — what a scrape reports, and which number says the gateway is in trouble
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development setup, branching, commits
 
 ## Authorship
