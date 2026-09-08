@@ -211,9 +211,21 @@ update destination set url = $2, enabled = $3 where id = $1 and tenant_id = $4;
 delete from route where id = $1 and tenant_id = $2;
 
 -- name: RouteByID :one
-select r.id, r.provider, d.id as destination_id, d.name, d.enabled
+select r.id, r.provider, d.id as destination_id, d.name, d.enabled, d.url
 from route r join destination d on d.id = r.destination_id
 where r.id = $1 and r.tenant_id = $2;
+
+-- What failed against an address that was wrong did not fail against the
+-- destination, so a corrected address gets the attempts back and is tried at
+-- once rather than at the end of a backoff earned by a typo.
+-- name: TryAgainAtTheNewAddress :execrows
+update delivery
+set attempts = 0,
+    next_attempt_at = now(),
+    leased_until = null,
+    last_status = null,
+    last_error = null
+where tenant_id = $1 and destination_id = $2 and state = 'pending';
 
 -- name: ReplayDestination :execrows
 update delivery as dl

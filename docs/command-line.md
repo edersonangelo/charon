@@ -112,6 +112,15 @@ charon route list
 | `-transport` | `http` | kind of destination |
 | `-tenant` | `default` | which tenant this route belongs to |
 
+Correcting a destination's address tries what is waiting for it at once, with
+its attempts back: what failed against an address that was wrong did not fail
+against the destination, and a backoff earned by a typo is not worth serving
+out. Saving without changing the address leaves the backoff alone, because a
+destination that is genuinely down has earned it.
+
+A delivery that already reached the attempt limit is dead and stays dead; the
+resend button on the routes page is how that comes back.
+
 Two routes for one provider deliver the same event twice, once to each
 destination. The same url twice for one provider is refused, because that is a
 duplicate rather than a fan-out.
