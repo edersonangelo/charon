@@ -95,7 +95,7 @@ docker pull edersomangelo/charon:alpha
 `linux/amd64` and `linux/arm64`, built from `scratch`, running as uid `65534`.
 PostgreSQL 18 is yours to provide.
 
-Running it, the tags and what they promise, and manifests for Kubernetes are in
+Running it standalone or under Kubernetes, and what each tag promises, are in
 **[docs/install.md](docs/install.md)**.
 
 ## Commands
@@ -385,7 +385,7 @@ past it every hour — never an event whose delivery is still pending.
 
 ## Documentation
 
-- [docs/install.md](docs/install.md) — the published image, its tags, and running it under Kubernetes
+- [docs/install.md](docs/install.md) — the published image, its tags, and running it standalone or under Kubernetes
 - [docs/command-line.md](docs/command-line.md) — every command and flag, and why each one is there
 - [docs/single-sign-on.md](docs/single-sign-on.md) — connecting an identity provider, and how it decides who lands where
 - [docs/signing.md](docs/signing.md) — proving a delivery came from Charon, and verifying it on the receiving side
