@@ -15,8 +15,9 @@ type Querier interface {
 	AddSigningSecret(ctx context.Context, arg AddSigningSecretParams) error
 	AttemptTotals(ctx context.Context, tenantID uuid.UUID) ([]AttemptTotalsRow, error)
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
-	// A signature that was checked and failed is never delivered. One that was
-	// never checked is: a provider with no verifier configured behaves as before.
+	// A signature that was checked and failed is never delivered, unless somebody
+	// overruled that deliberately and said why. One that was never checked is
+	// delivered: a provider with no verifier configured behaves as before.
 	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
 	ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error
 	ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
@@ -61,6 +62,7 @@ type Querier interface {
 	// left it out would count whatever the pooled connection happened to be
 	// pinned to and report it under every tenant's name.
 	EventTotals(ctx context.Context, tenantID uuid.UUID) ([]EventTotalsRow, error)
+	EventsUnderOverride(ctx context.Context, overrideID pgtype.UUID) ([]uuid.UUID, error)
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
@@ -92,6 +94,10 @@ type Querier interface {
 	NotifyWork(ctx context.Context) error
 	OldestPending(ctx context.Context, tenantID uuid.UUID) ([]OldestPendingRow, error)
 	OldestPendingAge(ctx context.Context) (float64, error)
+	// An event is overruled once. Saying so twice is the same decision, not a new
+	// one, and the first is the one that let it out.
+	OverrideEvents(ctx context.Context, arg OverrideEventsParams) (int64, error)
+	OverruleOnEvent(ctx context.Context, arg OverruleOnEventParams) (OverruleOnEventRow, error)
 	PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error)
 	PanelUserByEmail(ctx context.Context, email string) (PanelUser, error)
 	PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Text) (PanelUser, error)
@@ -107,6 +113,7 @@ type Querier interface {
 	PurgeEvents(ctx context.Context, arg PurgeEventsParams) (int64, error)
 	PurgeableEvents(ctx context.Context, arg PurgeableEventsParams) (int64, error)
 	RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error
+	RecordOverride(ctx context.Context, arg RecordOverrideParams) (uuid.UUID, error)
 	RecordSigningCheck(ctx context.Context, arg RecordSigningCheckParams) error
 	RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]RefusedByProviderRow, error)
 	RegisterAuthMethod(ctx context.Context, name string) error

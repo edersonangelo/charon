@@ -19,10 +19,13 @@ join destination d on d.id = r.destination_id
 where r.tenant_id = $1
 order by r.provider, d.name;
 
--- A signature that was checked and failed is never delivered. One that was
--- never checked is: a provider with no verifier configured behaves as before.
+-- A signature that was checked and failed is never delivered, unless somebody
+-- overruled that deliberately and said why. One that was never checked is
+-- delivered: a provider with no verifier configured behaves as before.
 -- name: ClaimUnplannedEvents :many
-select id, tenant_id, provider, signature from inbound_event
+select id, tenant_id, provider, signature,
+       (override_id is not null)::boolean as overridden
+from inbound_event
 where planned_at is null
 order by received_at
 limit $1
@@ -99,7 +102,8 @@ with next as (
                     join route r on r.provider = e.provider
                     join destination d on d.id = r.destination_id and d.enabled
                     where e.planned_at is null
-                      and e.signature in ('unchecked', 'valid')
+                      and (e.signature in ('unchecked', 'valid')
+                           or e.override_id is not null)
                 ) then now() end)
     ) as at
 )

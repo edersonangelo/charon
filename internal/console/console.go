@@ -119,6 +119,9 @@ type EventSummary struct {
 	// The highest attempt count among the routed deliveries, so the list shows
 	// what is struggling without opening it.
 	Attempts int32
+	// Forced says an operator overruled a failed signature to have this
+	// delivered. The signature itself still says what it said.
+	Forced bool
 }
 
 type EventDetail struct {
@@ -131,6 +134,17 @@ type EventDetail struct {
 	Planned    bool
 	Headers    map[string][]string
 	Body       []byte
+	// Overruled is the decision that had this delivered although it did not
+	// verify, when there was one. The signature above still says what it said.
+	Overruled *Overruled
+}
+
+// Overruled is why something that failed verification was delivered anyway,
+// and who said so.
+type Overruled struct {
+	Reason    string
+	DecidedBy string
+	DecidedAt time.Time
 }
 
 type Delivery struct {
@@ -175,6 +189,9 @@ type Attempt struct {
 	// SignedWith is what this attempt went out signed with, as it stood then.
 	// After a rotation the destination's current secrets no longer answer it.
 	SignedWith string
+	// Forced says the event's signature had failed and somebody decided it
+	// should go anyway.
+	Forced bool
 }
 
 type RouteRow struct {

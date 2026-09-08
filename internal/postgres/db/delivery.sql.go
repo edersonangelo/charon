@@ -68,7 +68,9 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 }
 
 const claimUnplannedEvents = `-- name: ClaimUnplannedEvents :many
-select id, tenant_id, provider, signature from inbound_event
+select id, tenant_id, provider, signature,
+       (override_id is not null)::boolean as overridden
+from inbound_event
 where planned_at is null
 order by received_at
 limit $1
@@ -76,14 +78,16 @@ for update skip locked
 `
 
 type ClaimUnplannedEventsRow struct {
-	ID        uuid.UUID
-	TenantID  uuid.UUID
-	Provider  string
-	Signature string
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	Provider   string
+	Signature  string
+	Overridden bool
 }
 
-// A signature that was checked and failed is never delivered. One that was
-// never checked is: a provider with no verifier configured behaves as before.
+// A signature that was checked and failed is never delivered, unless somebody
+// overruled that deliberately and said why. One that was never checked is
+// delivered: a provider with no verifier configured behaves as before.
 func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error) {
 	rows, err := q.db.Query(ctx, claimUnplannedEvents, limit)
 	if err != nil {
@@ -98,6 +102,7 @@ func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]Clai
 			&i.TenantID,
 			&i.Provider,
 			&i.Signature,
+			&i.Overridden,
 		); err != nil {
 			return nil, err
 		}
@@ -395,7 +400,8 @@ with next as (
                     join route r on r.provider = e.provider
                     join destination d on d.id = r.destination_id and d.enabled
                     where e.planned_at is null
-                      and e.signature in ('unchecked', 'valid')
+                      and (e.signature in ('unchecked', 'valid')
+                           or e.override_id is not null)
                 ) then now() end)
     ) as at
 )

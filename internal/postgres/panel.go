@@ -318,6 +318,7 @@ func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) ([]cons
 			BodySize:   row.BodySize,
 			Signature:  row.Signature,
 			Planned:    row.Planned,
+			Forced:     row.Forced,
 			Deliveries: row.Deliveries,
 			Delivered:  row.Delivered,
 			Dead:       row.Dead,
@@ -361,6 +362,7 @@ func (s *Store) EventDetail(ctx context.Context, id uuid.UUID) (console.EventDet
 		Planned:    row.PlannedAt.Valid,
 		Headers:    headers,
 		Body:       row.Body,
+		Overruled:  s.overruleOn(ctx, id),
 	}, nil
 }
 
@@ -387,6 +389,7 @@ func (s *Store) EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]conso
 				Error:       item.Error.String,
 				DurationMs:  item.DurationMs,
 				SignedWith:  item.SignedWith,
+				Forced:      item.Forced,
 			}
 			if len(rounds) == 0 || rounds[len(rounds)-1].Number != item.Round {
 				rounds = append(rounds, console.Round{Number: item.Round})

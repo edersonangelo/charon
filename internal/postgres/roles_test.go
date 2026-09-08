@@ -61,14 +61,16 @@ func TestTheRecordedRolesMatchTheOnesTheCodeShips(t *testing.T) {
 	}
 }
 
-// Every permission a seeded role grants has to be one the code enforces.
-// The permissions are written twice as well: as a constant set in Go, because
-// the code checks them, and as rows, because a grant points at one. This is
-// what notices when the two stop agreeing.
+// The permissions are written twice: as a constant set in Go, because the code
+// checks them, and as rows, because a grant points at one. Starting is what
+// puts the rows there, so this is what notices when the two stop agreeing.
 func TestThePermissionsInTheDatabaseAreTheOnesTheCodeEnforces(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
+	if err := store.Register(context.Background(), postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
+	}
 
 	stored, err := store.Permissions(context.Background())
 	if err != nil {
@@ -83,7 +85,7 @@ func TestThePermissionsInTheDatabaseAreTheOnesTheCodeEnforces(t *testing.T) {
 	for permission, description := range shipped {
 		held, present := stored[permission]
 		if !present {
-			t.Errorf("permission %q is enforced in code and missing from the migration", permission)
+			t.Errorf("permission %q is enforced in code and was not recorded", permission)
 			continue
 		}
 		if held != description {
