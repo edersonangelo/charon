@@ -516,6 +516,27 @@ func (q *Queries) EventsUnderOverride(ctx context.Context, overrideID pgtype.UUI
 	return items, nil
 }
 
+const forgetShippedGrants = `-- name: ForgetShippedGrants :exec
+delete from role_grant g
+where g.role_id = $1
+  and g.permission_id not in (
+      select p.id from permission p where p.name = any($2::text[])
+  )
+`
+
+type ForgetShippedGrantsParams struct {
+	RoleID uuid.UUID
+	Keep   []string
+}
+
+// A role nobody has changed grants what this build says it grants: not only
+// what is missing, but exactly that, so a permission the build stopped
+// shipping stops being granted too.
+func (q *Queries) ForgetShippedGrants(ctx context.Context, arg ForgetShippedGrantsParams) error {
+	_, err := q.db.Exec(ctx, forgetShippedGrants, arg.RoleID, arg.Keep)
+	return err
+}
+
 const grantPermission = `-- name: GrantPermission :exec
 insert into role_grant (role_id, permission_id)
 select $1, p.id from permission p where p.name = $2
@@ -1305,17 +1326,6 @@ func (q *Queries) RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, erro
 	return i, err
 }
 
-const roleHasAnyGrant = `-- name: RoleHasAnyGrant :one
-select exists (select 1 from role_grant where role_id = $1)
-`
-
-func (q *Queries) RoleHasAnyGrant(ctx context.Context, roleID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, roleHasAnyGrant, roleID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const roleIDByName = `-- name: RoleIDByName :one
 select id from role where (tenant_id is null or tenant_id = $1) and name = $2
 `
@@ -1330,6 +1340,17 @@ func (q *Queries) RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uui
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const roleWasChanged = `-- name: RoleWasChanged :one
+select changed from role where id = $1
+`
+
+func (q *Queries) RoleWasChanged(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, roleWasChanged, id)
+	var changed bool
+	err := row.Scan(&changed)
+	return changed, err
 }
 
 const roles = `-- name: Roles :many
@@ -1529,9 +1550,10 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 }
 
 const setRole = `-- name: SetRole :one
-insert into role (tenant_id, name, description)
-values ($1, $2, $3)
-on conflict (tenant_id, name) do update set description = excluded.description
+insert into role (tenant_id, name, description, changed)
+values ($1, $2, $3, true)
+on conflict (tenant_id, name) do update
+set description = excluded.description, changed = true
 returning id
 `
 
@@ -1541,6 +1563,8 @@ type SetRoleParams struct {
 	Description string
 }
 
+// Changing a role is what makes it the deployment's, and from then on starting
+// leaves it alone.
 func (q *Queries) SetRole(ctx context.Context, arg SetRoleParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, setRole, arg.TenantID, arg.Name, arg.Description)
 	var id uuid.UUID

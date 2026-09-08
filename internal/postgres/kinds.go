@@ -97,14 +97,26 @@ func (s *Store) registerAuthorization(ctx context.Context) error {
 			return fmt.Errorf("registering role %q: %w", role.Name, err)
 		}
 
-		// A role that grants something already has been decided by whoever
-		// runs this, and that decision outlives a restart.
-		granted, err := s.q.RoleHasAnyGrant(ctx, id)
+		// A role somebody changed is theirs, and that decision outlives a
+		// restart. One nobody has touched is the build's, so it grants what
+		// this build says — including whatever this version added, which is
+		// how a new permission reaches a deployment that was already running.
+		changed, err := s.q.RoleWasChanged(ctx, id)
 		if err != nil {
-			return fmt.Errorf("reading what %q grants: %w", role.Name, err)
+			return fmt.Errorf("reading whether %q was changed: %w", role.Name, err)
 		}
-		if granted {
+		if changed {
 			continue
+		}
+
+		keep := make([]string, 0, len(role.Grants))
+		for _, permission := range role.Grants {
+			keep = append(keep, string(permission))
+		}
+		if err := s.q.ForgetShippedGrants(ctx, db.ForgetShippedGrantsParams{
+			RoleID: id, Keep: keep,
+		}); err != nil {
+			return fmt.Errorf("clearing what %q no longer grants: %w", role.Name, err)
 		}
 
 		for _, permission := range role.Grants {
