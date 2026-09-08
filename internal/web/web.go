@@ -847,20 +847,11 @@ func (h *Handler) recheckVerification(w http.ResponseWriter, r *http.Request) {
 
 const recheckBatch = 500
 
+// The form answers before the round trip, with the same rule the store
+// enforces, so a mistake is caught where it was typed rather than only where it
+// would have been stored.
 func destinationURL(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("parsing the destination url: %w", err)
-	}
-	if parsed.Host == "" {
-		return "", errors.New("the destination url has no host")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", errors.New("the destination url must be http or https")
-	}
-	return trimmed, nil
+	return postgres.DeliverableURL(raw)
 }
 
 // Pushes a line whenever anything an operator is looking at has changed, so an

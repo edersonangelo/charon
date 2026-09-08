@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	neturl "net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -259,11 +261,47 @@ func (s *Store) MarkFailed(
 	return nil
 }
 
+// ErrBadDestination is an address nothing could ever be delivered to.
+var ErrBadDestination = errors.New(
+	"a destination needs an http or https address with a host")
+
+// DeliverableURL is what an address has to be before anything is routed to it.
+// It lives here rather than in a form, because the panel and the command line
+// are two ways to the same decision and only one of them was checking.
+//
+// It says nothing about the path. A trailing slash is a real endpoint, and
+// what belongs after the host is the receiver's business.
+func DeliverableURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+
+	parsed, err := neturl.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrBadDestination, err)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("%w: no host in %q", ErrBadDestination, trimmed)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("%w: %q is not http or https", ErrBadDestination, trimmed)
+	}
+	return trimmed, nil
+}
+
 func (s *Store) AddRoute(
 	ctx context.Context, provider, destination, url, transport string,
 ) error {
 	if transport == "" {
 		transport = outbound.HTTP
+	}
+
+	// Only an address something is delivered over has to look like one. A
+	// transport that is not http addresses its destination its own way.
+	if transport == outbound.HTTP {
+		checked, err := DeliverableURL(url)
+		if err != nil {
+			return err
+		}
+		url = checked
 	}
 
 	tx, err := s.pool.Begin(ctx)
