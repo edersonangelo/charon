@@ -143,6 +143,7 @@ type Role struct {
 	BuiltIn     bool
 	CreatedAt   time.Time
 	ID          uuid.UUID
+	Changed     bool
 }
 
 type RoleGrant struct {

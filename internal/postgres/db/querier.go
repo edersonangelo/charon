@@ -67,6 +67,10 @@ type Querier interface {
 	// pinned to and report it under every tenant's name.
 	EventTotals(ctx context.Context, tenantID uuid.UUID) ([]EventTotalsRow, error)
 	EventsUnderOverride(ctx context.Context, overrideID pgtype.UUID) ([]uuid.UUID, error)
+	// A role nobody has changed grants what this build says it grants: not only
+	// what is missing, but exactly that, so a permission the build stopped
+	// shipping stops being granted too.
+	ForgetShippedGrants(ctx context.Context, arg ForgetShippedGrantsParams) error
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
@@ -144,8 +148,8 @@ type Querier interface {
 	// somebody may do cannot depend on that.
 	Role(ctx context.Context, arg RoleParams) (RoleRow, error)
 	RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, error)
-	RoleHasAnyGrant(ctx context.Context, roleID uuid.UUID) (bool, error)
 	RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uuid.UUID, error)
+	RoleWasChanged(ctx context.Context, id uuid.UUID) (bool, error)
 	Roles(ctx context.Context, tenantID pgtype.UUID) ([]RolesRow, error)
 	RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByIDRow, error)
 	// The state counts only take deliveries whose destination is still routed and
@@ -154,6 +158,8 @@ type Querier interface {
 	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
 	SetProvider(ctx context.Context, arg SetProviderParams) error
 	SetRetention(ctx context.Context, arg SetRetentionParams) (int64, error)
+	// Changing a role is what makes it the deployment's, and from then on starting
+	// leaves it alone.
 	SetRole(ctx context.Context, arg SetRoleParams) (uuid.UUID, error)
 	// Becoming one means leaving the role behind, and with it the tenant the role
 	// belonged to; giving it up means being given a role again.

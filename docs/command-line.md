@@ -340,7 +340,11 @@ A permission nothing enforces cannot be granted: each one names something a
 route in the panel checks, so the set is closed in the code and held as rows in
 the database. `charon role permissions` prints it with what each one allows.
 
-A role shipped with Charon can be changed but not removed.
+A role shipped with Charon can be changed but not removed. Until it is changed
+it grants what the running build says it grants, so a permission a new version
+adds reaches it on the next start. Once changed it is the deployment's, and
+starting leaves it alone — including when a later version would have widened
+it.
 
 ## retention
 

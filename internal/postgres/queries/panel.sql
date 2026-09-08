@@ -293,10 +293,13 @@ group by r.id, r.name, r.description, r.built_in
 order by (r.tenant_id is null)
 limit 1;
 
+-- Changing a role is what makes it the deployment's, and from then on starting
+-- leaves it alone.
 -- name: SetRole :one
-insert into role (tenant_id, name, description)
-values ($1, $2, $3)
-on conflict (tenant_id, name) do update set description = excluded.description
+insert into role (tenant_id, name, description, changed)
+values ($1, $2, $3, true)
+on conflict (tenant_id, name) do update
+set description = excluded.description, changed = true
 returning id;
 
 -- name: ClearRoleGrants :exec
@@ -449,8 +452,18 @@ insert into role_grant (role_id, permission_id)
 select $1, p.id from permission p where p.name = $2
 on conflict do nothing;
 
--- name: RoleHasAnyGrant :one
-select exists (select 1 from role_grant where role_id = $1);
+-- name: RoleWasChanged :one
+select changed from role where id = $1;
+
+-- A role nobody has changed grants what this build says it grants: not only
+-- what is missing, but exactly that, so a permission the build stopped
+-- shipping stops being granted too.
+-- name: ForgetShippedGrants :exec
+delete from role_grant g
+where g.role_id = $1
+  and g.permission_id not in (
+      select p.id from permission p where p.name = any(sqlc.arg(keep)::text[])
+  );
 
 -- name: RecordOverride :one
 insert into signature_override (tenant_id, reason, decided_by)
