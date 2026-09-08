@@ -56,6 +56,30 @@ templ filters(providers []string, filter console.Filter) {
 		<button>search</button>
 		<a href="/events"><button type="button">clear</button></a>
 	</form>
+	if may(ctx, authz.EventsForce) {
+		@actions()
+	}
+}
+
+// Delivering something that did not verify is rare and deliberate, so it is
+// folded away rather than offered. The controls belong to the form around the
+// list, which is where the ticks are, and say so by name.
+templ actions() {
+	<details class="actions">
+		<summary>actions</summary>
+		<div>
+			<label>
+				deliver what is ticked although it did not verify, because
+				<input type="text" name="reason" form="force" size="40" minlength="10"
+						placeholder="say why, in a sentence"/>
+			</label>
+			<button form="force">deliver anyway</button>
+			<p class="muted">
+				Only a request that was checked and refused can be ticked. The signature is
+				not rewritten: it stays invalid or missing, and records who let it through.
+			</p>
+		</div>
+	</details>
 }
 
 templ eventsTable(events []console.EventSummary, filter console.Filter) {
@@ -63,11 +87,11 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 		if len(events) == 0 {
 			<p class="muted">Nothing matches.</p>
 		} else {
-			<form method="post" action="/events/force">
+			<form id="force" method="post" action="/events/force">
 			<table>
 				<thead>
 					<tr>
-						if refusedAmong(events) && may(ctx, authz.EventsForce) {
+						if may(ctx, authz.EventsForce) {
 							<th></th>
 						}
 						<th>received</th>
@@ -82,7 +106,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 						<tr data-open
 								hx-get={ "/events/" + event.ID.String() + "/fragment" }
 								hx-target="#detail-body" hx-swap="innerHTML">
-							if refusedAmong(events) && may(ctx, authz.EventsForce) {
+							if may(ctx, authz.EventsForce) {
 								<td onclick="event.stopPropagation()">
 									if refused(event) {
 										<input type="checkbox" name="event" value={ event.ID.String() }/>
@@ -106,19 +130,6 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 					}
 				</tbody>
 			</table>
-			if refusedAmong(events) && may(ctx, authz.EventsForce) {
-				<section class="attention">
-					<h2>Deliver one that did not verify</h2>
-					<p class="muted">
-						Tick what to send and say why. The signature is not rewritten: these stay
-						invalid or missing, and now also record who let them through. One reason
-						covers everything ticked.
-					</p>
-					<input type="text" name="reason" size="60" minlength="10" required
-							placeholder="why these are being delivered anyway"/>
-					<button>deliver anyway</button>
-				</section>
-			}
 			</form>
 			@pager(len(events), filter)
 		}
@@ -129,15 +140,6 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 // was never checked needs it, and nothing that passed is being let past.
 func refused(event console.EventSummary) bool {
 	return event.Signature == "invalid" || event.Signature == "missing"
-}
-
-func refusedAmong(events []console.EventSummary) bool {
-	for _, event := range events {
-		if refused(event) && !event.Forced {
-			return true
-		}
-	}
-	return false
 }
 
 templ forcedBadge(event console.EventSummary) {

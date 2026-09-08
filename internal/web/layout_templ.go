@@ -49,7 +49,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · Charon</title><script src=\"/static/htmx.min.js\"></script><style>\n\t\t\t\t:root { color-scheme: light dark; --line: #8883; --muted: #8889; }\n\t\t\t\t* { box-sizing: border-box }\n\t\t\t\tbody { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace }\n\t\t\t\tbody > header { display: flex; flex-wrap: wrap; align-items: stretch;\n\t\t\t\t                column-gap: 1.75rem; row-gap: .5rem;\n\t\t\t\t                padding: .5rem 1.25rem; border-bottom: 1px solid var(--line) }\n\t\t\t\tbody > header > * { align-self: flex-end; padding-bottom: .5rem }\n\t\t\t\tbody > header nav { display: flex; flex-wrap: wrap; gap: 1.25rem }\n\t\t\t\tbody > header nav a.at { color: inherit; box-shadow: 0 2px 0 currentColor }\n\t\t\t\tnav.areas { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0 0 1.25rem;\n\t\t\t\t            padding-bottom: .5rem; border-bottom: 1px solid var(--line) }\n\t\t\t\tnav.areas a { text-decoration: none; font-weight: 600 }\n\t\t\t\tnav.areas a.at { color: inherit; box-shadow: 0 2px 0 currentColor }\n\t\t\t\tdl.areas { margin: 0 }\n\t\t\t\tdl.areas dt { margin-top: .9rem }\n\t\t\t\tdl.areas dt a { font-weight: 600 }\n\t\t\t\tdl.areas dd { margin: 0 }\n\t\t\t\tbody > header .session { display: flex; align-items: center; gap: .75rem }\n\t\t\t\tbody > header .acting { display: flex; align-items: center; gap: .3rem }\n\t\t\t\tbody > header a { text-decoration: none; font-weight: 600 }\n\t\t\t\tbody > header .brand { display: inline-flex; align-items: center; gap: .65rem;\n\t\t\t\t                       align-self: center; padding-bottom: 0;\n\t\t\t\t                       font-weight: 700; font-size: 2.2rem; letter-spacing: -.02em }\n\t\t\t\tbody > header .brand img { display: block }\n\t\t\t\tbody > header .right { margin-left: auto; display: flex; flex-wrap: wrap;\n\t\t\t\t                       justify-content: flex-end; align-items: center;\n\t\t\t\t                       column-gap: 1.5rem; row-gap: .4rem }\n\t\t\t\tmain { padding: 1.25rem }\n\t\t\t\th1 { font-size: 1.1rem; margin: 0 0 1rem }\n\t\t\t\th2 { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 0 0 .5rem;\n\t\t\t\t     text-transform: uppercase; letter-spacing: .04em }\n\t\t\t\th2 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;\n\t\t\t\t            margin-left: .5rem; text-transform: none; letter-spacing: 0 }\n\t\t\t\ttable { border-collapse: collapse; width: 100% }\n\t\t\t\tth, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line);\n\t\t\t\t         vertical-align: top; white-space: nowrap }\n\t\t\t\tth { font-weight: 600; color: var(--muted) }\n\t\t\t\ttd.wrap { white-space: normal; word-break: break-all }\n\t\t\t\tform.filters { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem }\n\t\t\t\tinput, select, button { font: inherit; padding: .3rem .5rem;\n\t\t\t\t                        border: 1px solid var(--line); border-radius: 3px;\n\t\t\t\t                        background: transparent; color: inherit }\n\t\t\t\tbutton { cursor: pointer }\n\t\t\t\tpre { margin: 0; padding: .75rem; border: 1px solid var(--line); border-radius: 3px;\n\t\t\t\t      overflow-x: auto; white-space: pre-wrap; word-break: break-all }\n\t\t\t\tpre.code { word-break: normal; overflow-wrap: anywhere; tab-size: 2;\n\t\t\t\t           max-height: 28rem; overflow: auto }\n\t\t\t\tdetails { margin-top: .5rem }\n\t\t\t\tsummary { cursor: pointer }\n\t\t\t\th1 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;\n\t\t\t\t            margin-left: .5rem }\n\t\t\t\t.pill { padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 999px;\n\t\t\t\t        font-size: .8rem; margin-left: .4rem; white-space: nowrap }\n\t\t\t\t.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }\n\t\t\t\t.pill.good { color: #2a7 } .pill.bad { color: #d44 }\n\t\t\t\t.signing { display: flex; align-items: baseline; gap: .35rem;\n\t\t\t\t           font-size: .85rem; white-space: nowrap }\n\t\t\t\t.signing + .signing { margin-top: .2rem }\n\t\t\t\t.muted { color: var(--muted) }\n\t\t\t\tp.grants { display: flex; flex-wrap: wrap; align-items: baseline;\n\t\t\t\t           gap: .25rem .9rem; margin: .5rem 0 0 }\n\t\t\t\tp.grants .area { min-width: 7rem; color: var(--muted); font-size: .85rem }\n\t\t\t\tp.grants label { font-size: .9rem }\n\t\t\t\t.stats { display: flex; gap: 1rem; font-size: .85rem }\n\t\t\t\t.stats span, body > header .pill, body > header button { white-space: nowrap }\n\t\t\t\tsection { margin-bottom: 1.5rem }\n\t\t\t\tsection.attention { border: 1px solid #c92; border-radius: 4px; padding: .75rem 1rem;\n\t\t\t\t                    background: #cc99221a }\n\t\t\t\tsection.attention h1 { color: #c92 }\n\t\t\t\tsection form { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: 0 }\n\t\t\t\tsection form.stack { display: block }\n\t\t\t\tlabel { display: inline-flex; gap: .25rem; align-items: center; white-space: nowrap }\n\n\t\t\t\ttr[data-open] { cursor: pointer }\n\t\t\t\ttr[data-open]:hover { background: #8881 }\n\t\t\t\tdialog { width: min(64rem, 92vw); max-height: 86vh; padding: 0;\n\t\t\t\t         overflow: hidden; border: 1px solid var(--line); border-radius: 6px;\n\t\t\t\t         background: Canvas; color: CanvasText }\n\t\t\t\tdialog[open] { display: flex; flex-direction: column }\n\t\t\t\tdialog::backdrop { background: #0007 }\n\t\t\t\tdialog .modal-head { flex: 0 0 auto; display: flex; justify-content: flex-end;\n\t\t\t\t                     padding: .6rem 1rem; border-bottom: 1px solid var(--line) }\n\t\t\t\t#detail-body { flex: 1 1 auto; overflow: auto; padding: 1rem 1.25rem;\n\t\t\t\t               overscroll-behavior: contain }\n\t\t\t\t.scroll { max-width: 100%; overflow: auto }\n\t\t\t\t.scroll.attempts { max-height: 15rem; overscroll-behavior: contain }\n\t\t\t\t.scroll.attempts thead th { position: sticky; top: 0; z-index: 1;\n\t\t\t\t                            background: Canvas; box-shadow: 0 1px 0 var(--line) }\n\t\t\t</style></head><body><header><span class=\"brand\"><img src=\"/static/charon.png\" alt=\"\" width=\"104\" height=\"104\">Charon</span><nav>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · Charon</title><script src=\"/static/htmx.min.js\"></script><style>\n\t\t\t\t:root { color-scheme: light dark; --line: #8883; --muted: #8889; }\n\t\t\t\t* { box-sizing: border-box }\n\t\t\t\tbody { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace }\n\t\t\t\tbody > header { display: flex; flex-wrap: wrap; align-items: stretch;\n\t\t\t\t                column-gap: 1.75rem; row-gap: .5rem;\n\t\t\t\t                padding: .5rem 1.25rem; border-bottom: 1px solid var(--line) }\n\t\t\t\tbody > header > * { align-self: flex-end; padding-bottom: .5rem }\n\t\t\t\tbody > header nav { display: flex; flex-wrap: wrap; gap: 1.25rem }\n\t\t\t\tbody > header nav a.at { color: inherit; box-shadow: 0 2px 0 currentColor }\n\t\t\t\tnav.areas { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0 0 1.25rem;\n\t\t\t\t            padding-bottom: .5rem; border-bottom: 1px solid var(--line) }\n\t\t\t\tnav.areas a { text-decoration: none; font-weight: 600 }\n\t\t\t\tnav.areas a.at { color: inherit; box-shadow: 0 2px 0 currentColor }\n\t\t\t\tdl.areas { margin: 0 }\n\t\t\t\tdl.areas dt { margin-top: .9rem }\n\t\t\t\tdl.areas dt a { font-weight: 600 }\n\t\t\t\tdl.areas dd { margin: 0 }\n\t\t\t\tbody > header .session { display: flex; align-items: center; gap: .75rem }\n\t\t\t\tbody > header .acting { display: flex; align-items: center; gap: .3rem }\n\t\t\t\tbody > header a { text-decoration: none; font-weight: 600 }\n\t\t\t\tbody > header .brand { display: inline-flex; align-items: center; gap: .65rem;\n\t\t\t\t                       align-self: center; padding-bottom: 0;\n\t\t\t\t                       font-weight: 700; font-size: 2.2rem; letter-spacing: -.02em }\n\t\t\t\tbody > header .brand img { display: block }\n\t\t\t\tbody > header .right { margin-left: auto; display: flex; flex-wrap: wrap;\n\t\t\t\t                       justify-content: flex-end; align-items: center;\n\t\t\t\t                       column-gap: 1.5rem; row-gap: .4rem }\n\t\t\t\tmain { padding: 1.25rem }\n\t\t\t\th1 { font-size: 1.1rem; margin: 0 0 1rem }\n\t\t\t\th2 { font-size: .85rem; font-weight: 600; color: var(--muted); margin: 0 0 .5rem;\n\t\t\t\t     text-transform: uppercase; letter-spacing: .04em }\n\t\t\t\th2 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;\n\t\t\t\t            margin-left: .5rem; text-transform: none; letter-spacing: 0 }\n\t\t\t\ttable { border-collapse: collapse; width: 100% }\n\t\t\t\tth, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line);\n\t\t\t\t         vertical-align: top; white-space: nowrap }\n\t\t\t\tth { font-weight: 600; color: var(--muted) }\n\t\t\t\ttd.wrap { white-space: normal; word-break: break-all }\n\t\t\t\tform.filters { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem }\n\t\t\t\tinput, select, button { font: inherit; padding: .3rem .5rem;\n\t\t\t\t                        border: 1px solid var(--line); border-radius: 3px;\n\t\t\t\t                        background: transparent; color: inherit }\n\t\t\t\tbutton { cursor: pointer }\n\t\t\t\tpre { margin: 0; padding: .75rem; border: 1px solid var(--line); border-radius: 3px;\n\t\t\t\t      overflow-x: auto; white-space: pre-wrap; word-break: break-all }\n\t\t\t\tpre.code { word-break: normal; overflow-wrap: anywhere; tab-size: 2;\n\t\t\t\t           max-height: 28rem; overflow: auto }\n\t\t\t\tdetails { margin-top: .5rem }\n\t\t\t\tsummary { cursor: pointer }\n\t\t\t\th1 button { font-size: .8rem; padding: .1rem .45rem; vertical-align: middle;\n\t\t\t\t            margin-left: .5rem }\n\t\t\t\t.pill { padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 999px;\n\t\t\t\t        font-size: .8rem; margin-left: .4rem; white-space: nowrap }\n\t\t\t\t.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }\n\t\t\t\t.pill.good { color: #2a7 } .pill.bad { color: #d44 }\n\t\t\t\tdetails.actions { display: inline-block; position: relative }\n\t\t\t\tdetails.actions > summary { list-style: none; cursor: pointer;\n\t\t\t\t                            padding: .15rem .5rem; border: 1px solid var(--line);\n\t\t\t\t                            border-radius: 3px; font-size: .9rem }\n\t\t\t\tdetails.actions > summary::-webkit-details-marker { display: none }\n\t\t\t\tdetails.actions > div { position: absolute; right: 0; z-index: 5; width: 34rem;\n\t\t\t\t                        margin-top: .35rem; padding: .75rem;\n\t\t\t\t                        border: 1px solid var(--line); border-radius: 4px;\n\t\t\t\t                        background: Canvas }\n\t\t\t\tdetails.actions p { margin: .5rem 0 0 }\n\t\t\t\t.signing { display: flex; align-items: baseline; gap: .35rem;\n\t\t\t\t           font-size: .85rem; white-space: nowrap }\n\t\t\t\t.signing + .signing { margin-top: .2rem }\n\t\t\t\t.muted { color: var(--muted) }\n\t\t\t\tp.grants { display: flex; flex-wrap: wrap; align-items: baseline;\n\t\t\t\t           gap: .25rem .9rem; margin: .5rem 0 0 }\n\t\t\t\tp.grants .area { min-width: 7rem; color: var(--muted); font-size: .85rem }\n\t\t\t\tp.grants label { font-size: .9rem }\n\t\t\t\t.stats { display: flex; gap: 1rem; font-size: .85rem }\n\t\t\t\t.stats span, body > header .pill, body > header button { white-space: nowrap }\n\t\t\t\tsection { margin-bottom: 1.5rem }\n\t\t\t\tsection.attention { border: 1px solid #c92; border-radius: 4px; padding: .75rem 1rem;\n\t\t\t\t                    background: #cc99221a }\n\t\t\t\tsection.attention h1 { color: #c92 }\n\t\t\t\tsection form { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: 0 }\n\t\t\t\tsection form.stack { display: block }\n\t\t\t\tlabel { display: inline-flex; gap: .25rem; align-items: center; white-space: nowrap }\n\n\t\t\t\ttr[data-open] { cursor: pointer }\n\t\t\t\ttr[data-open]:hover { background: #8881 }\n\t\t\t\tdialog { width: min(64rem, 92vw); max-height: 86vh; padding: 0;\n\t\t\t\t         overflow: hidden; border: 1px solid var(--line); border-radius: 6px;\n\t\t\t\t         background: Canvas; color: CanvasText }\n\t\t\t\tdialog[open] { display: flex; flex-direction: column }\n\t\t\t\tdialog::backdrop { background: #0007 }\n\t\t\t\tdialog .modal-head { flex: 0 0 auto; display: flex; justify-content: flex-end;\n\t\t\t\t                     padding: .6rem 1rem; border-bottom: 1px solid var(--line) }\n\t\t\t\t#detail-body { flex: 1 1 auto; overflow: auto; padding: 1rem 1.25rem;\n\t\t\t\t               overscroll-behavior: contain }\n\t\t\t\t.scroll { max-width: 100%; overflow: auto }\n\t\t\t\t.scroll.attempts { max-height: 15rem; overscroll-behavior: contain }\n\t\t\t\t.scroll.attempts thead th { position: sticky; top: 0; z-index: 1;\n\t\t\t\t                            background: Canvas; box-shadow: 0 1px 0 var(--line) }\n\t\t\t</style></head><body><header><span class=\"brand\"><img src=\"/static/charon.png\" alt=\"\" width=\"104\" height=\"104\">Charon</span><nav>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -106,7 +106,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(summary.Delivered))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 123, Col: 60}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 133, Col: 60}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
@@ -119,7 +119,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(summary.Pending))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 124, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 134, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -132,7 +132,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(summary.Dead))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 125, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 135, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -150,7 +150,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(summary.AwaitingRoute))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 127, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 137, Col: 61}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
@@ -179,7 +179,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 					var templ_7745c5c3_Var11 string
 					templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(tenant.Slug)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 136, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 146, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 					if templ_7745c5c3_Err != nil {
@@ -192,7 +192,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 					var templ_7745c5c3_Var12 string
 					templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(tenant.Slug)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 136, Col: 62}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 146, Col: 62}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 					if templ_7745c5c3_Err != nil {
@@ -210,7 +210,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(tenant.Slug)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 138, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 148, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 					if templ_7745c5c3_Err != nil {
@@ -223,7 +223,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 					var templ_7745c5c3_Var14 string
 					templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(tenant.Slug)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 138, Col: 53}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 148, Col: 53}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 					if templ_7745c5c3_Err != nil {
@@ -247,7 +247,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		var templ_7745c5c3_Var15 string
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(user)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 145, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 155, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 		if templ_7745c5c3_Err != nil {
@@ -260,7 +260,7 @@ func layout(title string, user string, summary Summary) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(roleName(ctx))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 146, Col: 39}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 156, Col: 39}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -328,7 +328,7 @@ func loginPage(methods []auth.Method, refused bool) templ.Component {
 				var templ_7745c5c3_Var18 templ.SafeURL
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/auth/" + method.Name()))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 258, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 268, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -346,7 +346,7 @@ func loginPage(methods []auth.Method, refused bool) templ.Component {
 				var templ_7745c5c3_Var19 templ.SafeURL
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/auth/" + method.Name() + "/start"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 265, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 275, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {
@@ -359,7 +359,7 @@ func loginPage(methods []auth.Method, refused bool) templ.Component {
 				var templ_7745c5c3_Var20 string
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs("sign in with " + method.Label())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 266, Col: 64}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 276, Col: 64}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 				if templ_7745c5c3_Err != nil {
