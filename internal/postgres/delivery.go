@@ -109,6 +109,11 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 			return nil, fmt.Errorf("decoding the headers of delivery %s: %w", row.ID, err)
 		}
 
+		signing, signErr := s.q.SigningSecretsFor(ctx, row.DestinationID)
+		if signErr != nil {
+			return nil, fmt.Errorf("reading how delivery %s is signed: %w", row.ID, signErr)
+		}
+
 		deliveries = append(deliveries, outbound.Delivery{
 			ID:        row.ID,
 			EventID:   row.EventID,
@@ -119,6 +124,7 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 			Provider:  target.Provider,
 			Headers:   headers,
 			Body:      target.Body,
+			Signing:   signing,
 		})
 	}
 	return deliveries, nil
@@ -256,6 +262,7 @@ func (s *Store) Routes(ctx context.Context) ([]outbound.Route, error) {
 			Transport:   row.Transport,
 			URL:         row.Url,
 			Enabled:     row.Enabled,
+			Signed:      int(row.Signed),
 		})
 	}
 	return routes, nil

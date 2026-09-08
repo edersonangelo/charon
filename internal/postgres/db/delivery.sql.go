@@ -282,7 +282,8 @@ func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, arg Enable
 }
 
 const listRoutes = `-- name: ListRoutes :many
-select r.provider, d.name, d.url, d.transport, d.enabled
+select r.provider, d.name, d.url, d.transport, d.enabled,
+       (select count(*) from signing_secret s where s.destination_id = d.id) as signed
 from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1
@@ -295,6 +296,7 @@ type ListRoutesRow struct {
 	Url       string
 	Transport string
 	Enabled   bool
+	Signed    int64
 }
 
 func (q *Queries) ListRoutes(ctx context.Context, tenantID uuid.UUID) ([]ListRoutesRow, error) {
@@ -312,6 +314,7 @@ func (q *Queries) ListRoutes(ctx context.Context, tenantID uuid.UUID) ([]ListRou
 			&i.Url,
 			&i.Transport,
 			&i.Enabled,
+			&i.Signed,
 		); err != nil {
 			return nil, err
 		}

@@ -18,6 +18,10 @@ type Result struct {
 	Status int
 	// Detail is what to show when an attempt did not succeed.
 	Detail string
+	// Signed names the secrets the delivery went out signed with, never the
+	// secrets. Recorded on the attempt because after a rotation the set that
+	// is configured no longer says which one went out when.
+	Signed []string
 	// Retryable is false when the transport knows another attempt cannot
 	// help, so a delivery is not retried twelve times against a rejection
 	// that will never change.

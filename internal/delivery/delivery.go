@@ -21,6 +21,7 @@ type Queue interface {
 	MarkFailed(ctx context.Context, id uuid.UUID, nextAttempt time.Time,
 		status int, reason string, maxAttempts int) error
 	RecordAttempt(ctx context.Context, deliveryID uuid.UUID, attempt, status int,
+		signedWith []string,
 		reason string, took time.Duration) error
 	NextWorkAt(ctx context.Context) (time.Time, bool, error)
 	Notifications(ctx context.Context) <-chan struct{}
@@ -192,7 +193,8 @@ func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 		detail = result.Detail
 	}
 
-	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, result.Status, detail, took); recErr != nil {
+	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, result.Status,
+		result.Signed, detail, took); recErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a delivery attempt",
 			"delivery_id", item.ID, "error", recErr)
 	}

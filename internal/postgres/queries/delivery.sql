@@ -12,7 +12,8 @@ values ($1, $2, $3)
 on conflict (tenant_id, provider, destination_id) do nothing;
 
 -- name: ListRoutes :many
-select r.provider, d.name, d.url, d.transport, d.enabled
+select r.provider, d.name, d.url, d.transport, d.enabled,
+       (select count(*) from signing_secret s where s.destination_id = d.id) as signed
 from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1

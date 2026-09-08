@@ -114,6 +114,18 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 
+	secrets, err := resolveAll(delivery.Signing)
+	if err != nil {
+		// Retryable, because what is missing is put there by a deploy rather
+		// than by anything this process can do, and a delivery should still be
+		// waiting when it arrives.
+		return outbound.Result{
+			Detail:    "signing the delivery: " + err.Error(),
+			Retryable: true,
+		}
+	}
+	signature := outbound.Signature(secrets, time.Now().Unix(), delivery.Body)
+
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodPost, delivery.URL, bytes.NewReader(delivery.Body))
 	if err != nil {
@@ -125,6 +137,9 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 	if contentType := header(delivery.Headers, "Content-Type"); contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	if signature != "" {
+		req.Header.Set(outbound.SignatureHeader, signature)
+	}
 	req.Header.Set("X-Charon-Delivery-Id", delivery.ID.String())
 	req.Header.Set("X-Charon-Event-Id", delivery.EventID.String())
 	req.Header.Set("X-Charon-Provider", delivery.Provider)
@@ -135,6 +150,7 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 	if err != nil {
 		return outbound.Result{
 			Detail:    "reaching the destination: " + err.Error(),
+			Signed:    delivery.Signing,
 			Retryable: true,
 		}
 	}
@@ -146,6 +162,7 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 		Accepted:  resp.StatusCode >= 200 && resp.StatusCode < 300,
 		Status:    resp.StatusCode,
 		Detail:    fmt.Sprintf("destination answered %d", resp.StatusCode),
+		Signed:    delivery.Signing,
 		Retryable: true,
 	}
 }
