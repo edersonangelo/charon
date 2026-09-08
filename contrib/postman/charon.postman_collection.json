@@ -297,7 +297,54 @@
                 "stripe"
               ]
             },
-            "description": "Only POST is served, so a provider misconfigured to GET is not silently treated as a delivery."
+            "description": "A GET is served only for a provider configured to confirm its address before it will send anything. None is here, so the address still refuses, and a provider misconfigured to GET is not silently treated as a delivery."
+          },
+          "response": []
+        },
+        {
+          "name": "A handshake for an unknown tenant is not found",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/nobody/stripe?hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=not-the-token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "nobody",
+                "stripe"
+              ],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "1158201444"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "not-the-token"
+                }
+              ]
+            },
+            "description": "The tenant is resolved before anything else is decided, because which token is expected is a fact about one tenant. An address naming a tenant that does not exist has nothing to confirm."
           },
           "response": []
         }

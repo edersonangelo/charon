@@ -15,6 +15,7 @@ import (
 var errVerifyUsage = errors.New(
 	"usage: charon verify set -provider <name> -secret-env <VAR>\n" +
 		"         -preset <" + strings.Join(provider.PresetNames(), "|") + ">\n" +
+		"         [-verify-token-env <VAR>] for a provider that confirms the address first\n" +
 		"         or the parameters directly:\n" +
 		"         -verifier <" + strings.Join(provider.Default().Kinds(), "|") + ">" +
 		" -scheme <" + strings.Join(provider.Schemes(), "|") + ">" +
@@ -56,6 +57,9 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	name := fs.String("provider", "", "the provider whose requests are checked")
 	secretEnv := fs.String("secret-env", "",
 		"name of the environment variable holding the shared secret")
+	verifyTokenEnv := fs.String("verify-token-env", "",
+		"name of the environment variable holding the token a provider offers "+
+			"when it confirms this address")
 	preset := fs.String("preset", "",
 		"a named set of parameters: "+strings.Join(provider.PresetNames(), ", "))
 	slug := tenantFlag(fs)
@@ -124,15 +128,24 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	if err := store.SetProvider(ctx, postgres.ProviderSettings{
-		Name:      *name,
-		SecretEnv: *secretEnv,
-		Settings:  settings,
+		Name:           *name,
+		SecretEnv:      *secretEnv,
+		VerifyTokenEnv: *verifyTokenEnv,
+		Settings:       settings,
 	}); err != nil {
 		return err
 	}
 
-	_, err = fmt.Fprintf(stdout, "%s is checked with %s, secret from %s\n",
-		*name, settings.Verifier, *secretEnv)
+	if _, err := fmt.Fprintf(stdout, "%s is checked with %s, secret from %s\n",
+		*name, settings.Verifier, *secretEnv); err != nil {
+		return err
+	}
+	if *verifyTokenEnv == "" {
+		return nil
+	}
+
+	_, err = fmt.Fprintf(stdout, "%s confirms its address with the token in %s\n",
+		*name, *verifyTokenEnv)
 	return err
 }
 
@@ -144,7 +157,7 @@ func override(field *string, given string) {
 
 func verifyPresets(stdout io.Writer) error {
 	for _, preset := range provider.Presets() {
-		if _, err := fmt.Fprintf(stdout, "%-14s %s\n", preset.Name, preset.Description); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%-18s %s\n", preset.Name, preset.Description); err != nil {
 			return err
 		}
 	}
@@ -171,6 +184,12 @@ func verifyList(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		where := item.SecretEnv
 		if !item.SecretPresent {
 			where += " (not set in this environment)"
+		}
+		if item.VerifyTokenEnv != "" {
+			where += ", verify token from " + item.VerifyTokenEnv
+			if !item.VerifyTokenPresent {
+				where += " (not set in this environment)"
+			}
 		}
 		if _, err := fmt.Fprintf(stdout, "%-20s %-14s %-24s %s\n",
 			item.Name, item.Verifier, item.Header, where); err != nil {

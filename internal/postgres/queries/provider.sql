@@ -1,9 +1,9 @@
 -- name: SetProvider :exec
 insert into provider (
     tenant_id, name, verifier, secret_env, signature_header, tolerance_seconds,
-    scheme, algorithm, encoding, timestamp_key, signature_key
+    scheme, algorithm, encoding, timestamp_key, signature_key, verify_token_env
 ) values (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
 on conflict (tenant_id, name) do update
 set verifier = excluded.verifier,
@@ -14,11 +14,12 @@ set verifier = excluded.verifier,
     algorithm = excluded.algorithm,
     encoding = excluded.encoding,
     timestamp_key = excluded.timestamp_key,
-    signature_key = excluded.signature_key;
+    signature_key = excluded.signature_key,
+    verify_token_env = excluded.verify_token_env;
 
 -- name: Providers :many
 select name, verifier, secret_env, signature_header, tolerance_seconds,
-       scheme, algorithm, encoding, timestamp_key, signature_key
+       scheme, algorithm, encoding, timestamp_key, signature_key, verify_token_env
 from provider where tenant_id = $1 order by name;
 
 -- name: DeleteProvider :exec

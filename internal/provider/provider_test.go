@@ -360,6 +360,10 @@ func TestEveryPresetIsOnlyParameters(t *testing.T) {
 				t.Fatalf("preset %q names verifier %q, which is not registered",
 					preset.Name, preset.Settings.Verifier)
 			}
+			if preset.Settings.Secret != "" || preset.Settings.VerifyToken != "" {
+				t.Fatalf("preset %q carries a credential; a preset is parameters, "+
+					"and a credential belongs in the environment", preset.Name)
+			}
 
 			settings := preset.Settings
 			settings.Secret = secret
@@ -391,6 +395,16 @@ func TestThePresetsMatchWhatTheVendorsSend(t *testing.T) {
 			preset: "stripe",
 			headers: headers("Stripe-Signature", fmt.Sprintf("t=%s,v1=%s", stamp,
 				digest(t, provider.SHA256, provider.Hex, secret, append([]byte(stamp+"."), body...)))),
+		},
+		{
+			preset: "instagram",
+			headers: headers("X-Hub-Signature-256",
+				"sha256="+digest(t, provider.SHA256, provider.Hex, secret, body)),
+		},
+		{
+			preset: "whatsapp-bussines",
+			headers: headers("X-Hub-Signature-256",
+				"sha256="+digest(t, provider.SHA256, provider.Hex, secret, body)),
 		},
 		{
 			preset: "shopify",

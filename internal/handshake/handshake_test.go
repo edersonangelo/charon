@@ -1,0 +1,223 @@
+package handshake_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/edersonangelo/charon/internal/handshake"
+	"github.com/edersonangelo/charon/internal/ingest"
+)
+
+var (
+	firstTenant  = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	secondTenant = uuid.MustParse("00000000-0000-0000-0000-000000000002")
+)
+
+type fakeTenants struct{ fail error }
+
+func (f fakeTenants) Tenant(_ context.Context, slug string) (uuid.UUID, bool, error) {
+	if f.fail != nil {
+		return uuid.Nil, false, f.fail
+	}
+	switch slug {
+	case ingest.DefaultTenant:
+		return firstTenant, true, nil
+	case "second":
+		return secondTenant, true, nil
+	default:
+		return uuid.Nil, false, nil
+	}
+}
+
+// tokens is the port the handler needs: a token per tenant and provider, and
+// nothing for anybody absent.
+type tokens map[uuid.UUID]map[string]string
+
+func (t tokens) VerifyToken(tenant uuid.UUID, name string) string { return t[tenant][name] }
+
+func serve(t *testing.T, cfg handshake.Config) *http.ServeMux {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	handshake.New(fakeTenants{}, cfg).Register(mux)
+	return mux
+}
+
+func get(t *testing.T, mux *http.ServeMux, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+const (
+	challenge = "1158201444"
+	token     = "a-token-the-operator-chose"
+)
+
+func configured() handshake.Config {
+	return handshake.Config{Tokens: tokens{firstTenant: {"whatsapp": token}}}
+}
+
+func TestTheChallengeIsEchoedExactly(t *testing.T) {
+	t.Parallel()
+
+	rec := get(t, serve(t, configured()),
+		"/webhooks/whatsapp?hub.mode=subscribe&hub.challenge="+challenge+"&hub.verify_token="+token)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	// By equality, not by containment: the provider compares the body byte for
+	// byte, so a trailing newline is a failed handshake.
+	if got := rec.Body.String(); got != challenge {
+		t.Errorf("body = %q, want %q", got, challenge)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("content type = %q, want text/plain", got)
+	}
+}
+
+func TestAWrongTokenIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"a different token", "&hub.verify_token=not-the-token"},
+		{"an empty token", "&hub.verify_token="},
+		{"no token at all", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := get(t, serve(t, configured()),
+				"/webhooks/whatsapp?hub.mode=subscribe&hub.challenge="+challenge+tt.query)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+			}
+			if body := rec.Body.String(); strings.Contains(body, challenge) {
+				t.Errorf("body %q echoed the challenge to a caller that proved nothing", body)
+			}
+			if body := rec.Body.String(); strings.Contains(body, token) {
+				t.Errorf("body %q gave away the configured token", body)
+			}
+		})
+	}
+}
+
+// ConstantTimeCompare of two empty slices holds, so a provider configured with
+// a variable that is not set here must not confirm its address to a request
+// that offered nothing.
+func TestAnEmptyTokenNeverMatches(t *testing.T) {
+	t.Parallel()
+
+	cfg := handshake.Config{Tokens: tokens{firstTenant: {"whatsapp": ""}}}
+	rec := get(t, serve(t, cfg), "/webhooks/whatsapp?hub.challenge="+challenge)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d (body %q)",
+			rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+	}
+}
+
+func TestAProviderWithNoHandshakeIsStillPostOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  handshake.Config
+	}{
+		{"nothing configured for this provider", configured()},
+		{"nothing wired at all", handshake.Config{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := get(t, serve(t, tt.cfg), "/webhooks/stripe")
+
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+			}
+			if got := rec.Header().Get("Allow"); got != http.MethodPost {
+				t.Errorf("allow = %q, want %q", got, http.MethodPost)
+			}
+		})
+	}
+}
+
+func TestTheAddressDecidesWhoseTokenIsExpected(t *testing.T) {
+	t.Parallel()
+
+	cfg := handshake.Config{Tokens: tokens{
+		firstTenant:  {"whatsapp": token},
+		secondTenant: {"whatsapp": "another-tenants-token"},
+	}}
+	mux := serve(t, cfg)
+
+	confirmed := get(t, mux,
+		"/webhooks/second/whatsapp?hub.challenge="+challenge+"&hub.verify_token=another-tenants-token")
+	if confirmed.Code != http.StatusOK {
+		t.Fatalf("the second tenant's own token = %d, want %d", confirmed.Code, http.StatusOK)
+	}
+
+	crossed := get(t, mux,
+		"/webhooks/second/whatsapp?hub.challenge="+challenge+"&hub.verify_token="+token)
+	if crossed.Code != http.StatusForbidden {
+		t.Errorf("one tenant's token on another's address = %d, want %d",
+			crossed.Code, http.StatusForbidden)
+	}
+}
+
+func TestAHandshakeForAnUnknownTenantIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	rec := get(t, serve(t, configured()),
+		"/webhooks/nobody/whatsapp?hub.challenge="+challenge+"&hub.verify_token="+token)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestAnAbsentChallengeIsEchoedAsNothing(t *testing.T) {
+	t.Parallel()
+
+	rec := get(t, serve(t, configured()), "/webhooks/whatsapp?hub.verify_token="+token)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if body := rec.Body.String(); body != "" {
+		t.Errorf("body = %q, want it empty", body)
+	}
+}
+
+// A database that cannot answer is not a refusal: answering 403 would tell a
+// provider its token is wrong when nothing was ever compared.
+func TestADatabaseThatCannotAnswerIsNotARefusal(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	handshake.New(fakeTenants{fail: errors.New("the database is gone")}, configured()).Register(mux)
+
+	rec := get(t, mux, "/webhooks/whatsapp?hub.challenge="+challenge+"&hub.verify_token="+token)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}

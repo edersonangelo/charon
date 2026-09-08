@@ -28,6 +28,7 @@ type Cache struct {
 
 	mu       sync.RWMutex
 	built    map[uuid.UUID]map[string]Verifier
+	tokens   map[uuid.UUID]map[string]string
 	fallback Verifier
 }
 
@@ -47,6 +48,7 @@ func NewCache(source Source, registry *Registry, refresh time.Duration, logger *
 		logger:   logger,
 		refresh:  refresh,
 		built:    map[uuid.UUID]map[string]Verifier{},
+		tokens:   map[uuid.UUID]map[string]string{},
 		fallback: Unverified{},
 	}
 }
@@ -59,6 +61,17 @@ func (c *Cache) Verifier(tenant uuid.UUID, name string) Verifier {
 		return verifier
 	}
 	return c.fallback
+}
+
+// VerifyToken is the token a provider must offer before its callback address
+// is confirmed. Empty means there is nothing to confirm: either no provider
+// asked for it, or the variable it was told to read is not set here. Nothing
+// can be compared against nothing, so the two are the same answer.
+func (c *Cache) VerifyToken(tenant uuid.UUID, name string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.tokens[tenant][name]
 }
 
 // Watch loads the settings and keeps them current: at once when a change is
@@ -96,9 +109,17 @@ func (c *Cache) load(ctx context.Context) {
 	}
 
 	built := make(map[uuid.UUID]map[string]Verifier, len(byTenant))
+	tokens := make(map[uuid.UUID]map[string]string, len(byTenant))
 	for tenant, settings := range byTenant {
 		verifiers := make(map[string]Verifier, len(settings))
 		for name, item := range settings {
+			if item.VerifyToken != "" {
+				if tokens[tenant] == nil {
+					tokens[tenant] = map[string]string{}
+				}
+				tokens[tenant][name] = item.VerifyToken
+			}
+
 			verifier, err := c.registry.Verifier(item)
 			if err != nil {
 				c.logger.ErrorContext(ctx, "verification settings are not usable",
@@ -112,7 +133,10 @@ func (c *Cache) load(ctx context.Context) {
 		built[tenant] = verifiers
 	}
 
+	// Both under one lock: a reader must never see a verifier from this load
+	// beside a token from the last one.
 	c.mu.Lock()
 	c.built = built
+	c.tokens = tokens
 	c.mu.Unlock()
 }

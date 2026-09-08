@@ -225,6 +225,8 @@ signature does not match is still recorded and marked, and never delivered.
 ```sh
 export CHARON_SECRET_STRIPE='whsec_...'   # or a line in .env, under compose
 charon verify set -provider stripe -preset stripe -secret-env CHARON_SECRET_STRIPE
+charon verify set -provider whatsapp-bussines -preset whatsapp-bussines \
+  -secret-env CHARON_SECRET_WHATSAPP -verify-token-env CHARON_VERIFY_WHATSAPP
 charon verify presets
 charon verify list
 charon verify recheck -provider stripe
@@ -235,7 +237,8 @@ charon verify remove -provider stripe
 |---|---|
 | `-provider` | whose requests are checked |
 | `-secret-env` | **name** of the environment variable holding the secret |
-| `-preset` | `stripe`, `github`, `shopify`, `bearer-token`, `basic-auth` |
+| `-verify-token-env` | **name** of the environment variable holding the token a provider offers when it confirms the address, for one that will not accept an address until it answers |
+| `-preset` | `stripe`, `charon`, `github`, `shopify`, `whatsapp-bussines`, `instagram`, `bearer-token`, `basic-auth` |
 | `-verifier` | `hmac`, `shared-token`, `basic-auth` |
 | `-scheme` | `simple`, `advanced` |
 | `-algorithm` | `sha1`, `sha256`, `sha512` |
@@ -267,6 +270,15 @@ charon verify recheck -provider stripe
 Neither touches a request that was already delivered. It keeps the answer it
 went out with, because saying now that it was never signed would claim it had
 been held back, and it was not.
+
+Some providers confirm the address before sending anything: they `GET` it with
+a token they were told and a value to echo. `-verify-token-env` names the
+variable holding that token, and `GET /webhooks/{provider}` then answers `200`
+with the echoed value, `403` to a wrong token, and `405` for a provider with no
+handshake configured. A variable that is named but not set in the serving
+process comes to the same `405`, which is what `verify list` reports as
+`verify token from VAR (not set in this environment)`. The token and the
+signing secret are independent: a provider can have either, both or neither.
 
 ## sign
 

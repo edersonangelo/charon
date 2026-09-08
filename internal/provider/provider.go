@@ -29,8 +29,12 @@ const (
 
 // Settings are the parameters as an operator stores them.
 type Settings struct {
-	Verifier     string
-	Secret       string
+	Verifier string
+	Secret   string
+	// VerifyToken is what a provider that confirms its callback address before
+	// sending anything offers when it does. Resolved, like Secret, so a preset
+	// must never set either: a preset is parameters, and these are credentials.
+	VerifyToken  string
 	Header       string
 	Scheme       string
 	Algorithm    string

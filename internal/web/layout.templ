@@ -56,6 +56,11 @@ templ layout(title string, user string, summary Summary) {
 				th { font-weight: 600; color: var(--muted) }
 				td.wrap { white-space: normal; word-break: break-all }
 				form.filters { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem }
+				/* A field only some providers ask for. Hidden by what is
+				   selected rather than by script, and hidden rather than
+				   shown, so a browser without :has() offers it always. */
+				form.filters:has(select[name="preset"] option:not([data-confirms]):checked)
+				    .confirms-address { display: none }
 				input, select, button { font: inherit; padding: .3rem .5rem;
 				                        border: 1px solid var(--line); border-radius: 3px;
 				                        background: transparent; color: inherit }

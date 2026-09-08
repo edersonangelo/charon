@@ -5,9 +5,10 @@ import "time"
 // A preset is a name for a set of parameters. It adds no behaviour: everything
 // it fills in could be typed by hand, and nothing reads the name at runtime.
 type Preset struct {
-	Name        string
-	Description string
-	Settings    Settings
+	Name            string
+	Description     string
+	Settings        Settings
+	ConfirmsAddress bool
 }
 
 func Presets() []Preset {
@@ -46,6 +47,26 @@ func Presets() []Preset {
 				Verifier: HMAC, Scheme: Simple, Algorithm: SHA256, Encoding: Base64,
 				Header: "X-Shopify-Hmac-Sha256",
 			},
+		},
+		{
+			Name: "whatsapp-bussines",
+			Description: "X-Hub-Signature-256 in hex as Meta signs the body, " +
+				"for a provider whose address is confirmed with -verify-token-env",
+			Settings: Settings{
+				Verifier: HMAC, Scheme: Simple, Algorithm: SHA256, Encoding: Hex,
+				Header: "X-Hub-Signature-256",
+			},
+			ConfirmsAddress: true,
+		},
+		{
+			Name: "instagram",
+			Description: "the same as whatsapp-bussines, for an Instagram app: " +
+				"Meta signs and confirms an address the same way for both",
+			Settings: Settings{
+				Verifier: HMAC, Scheme: Simple, Algorithm: SHA256, Encoding: Hex,
+				Header: "X-Hub-Signature-256",
+			},
+			ConfirmsAddress: true,
 		},
 		{
 			Name:        "bearer-token",

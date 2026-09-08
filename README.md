@@ -154,6 +154,29 @@ be looked at. Nothing that failed is delivered. Once the secret is right,
 `charon verify recheck -provider stripe` checks the refused requests again and
 reopens the ones that now pass.
 
+Some providers will not accept a callback address until the address answers for
+itself. WhatsApp, Instagram and Messenger send a `GET` carrying a token you
+chose and a value to echo back, and deliver nothing until they get that value:
+
+```sh
+printf 'CHARON_SECRET_WHATSAPP=%s\nCHARON_VERIFY_WHATSAPP=%s\n' \
+  'the-app-secret' 'a-token-you-chose' >> .env
+docker compose up -d --force-recreate charon
+docker compose run --rm charon verify set -provider whatsapp-bussines \
+  -preset whatsapp-bussines -secret-env CHARON_SECRET_WHATSAPP \
+  -verify-token-env CHARON_VERIFY_WHATSAPP
+```
+
+Then the callback address is `https://your-host/webhooks/whatsapp-bussines`,
+and the verify token is the one you put in `CHARON_VERIFY_WHATSAPP`. Charon
+answers `200` with the value the provider asked it to echo, `403` to anyone
+offering a different token, and `405` for every provider with no handshake
+configured — which is what a variable that is named but not set in the serving
+process comes to as well, and what `charon verify list` reports.
+
+Like the secret, the database holds only the name of the variable. The two are
+independent: a provider can have a signature, a handshake, both, or neither.
+
 ## Tenants
 
 Everything recorded belongs to a tenant: events, routes, destinations,
@@ -178,11 +201,15 @@ The address a webhook arrives at decides the tenant:
 ```
 POST /webhooks/{provider}            the default tenant
 POST /webhooks/{tenant}/{provider}   that tenant
+GET  /webhooks/{provider}            the handshake, for a provider that asks for one
+GET  /webhooks/{tenant}/{provider}   the same, for that tenant
 ```
 
-An address naming a tenant that does not exist is refused with `404`, and it is
-the only rejection Charon makes that is not about a resource limit. Every other
-command takes `-tenant`, which defaults to `default` and to `CHARON_TENANT`.
+An address naming a tenant that does not exist is refused with `404`, and a
+handshake offering the wrong token with `403`. Those are the only rejections
+Charon makes that are not about a resource limit: a delivery is never refused
+for anything its body says. Every other command takes `-tenant`, which defaults
+to `default` and to `CHARON_TENANT`.
 
 Keeping tenants apart is Charon's job: every row carries the tenant it belongs
 to, and every query is scoped to one. Nothing else is required of the

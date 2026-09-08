@@ -190,7 +190,10 @@ func TestReceiveReturnsTheEventIdentifier(t *testing.T) {
 	}
 }
 
-func TestReceiveIsPostOnly(t *testing.T) {
+// What the inbound port registers, not what the server answers: the handshake
+// package registers GET on this address too, and a provider configured to
+// confirm its address is answered there.
+func TestIngestRegistersOnlyPost(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeRecorder{}
