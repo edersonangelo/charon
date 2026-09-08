@@ -42,17 +42,20 @@ type Delivery struct {
 }
 
 type DeliveryAttempt struct {
-	ID          uuid.UUID
-	DeliveryID  uuid.UUID
-	Attempt     int32
-	AttemptedAt time.Time
-	Status      pgtype.Int4
-	Error       pgtype.Text
-	DurationMs  int32
-	Round       int32
-	TenantID    uuid.UUID
-	SignedWith  string
-	Forced      bool
+	ID                uuid.UUID
+	DeliveryID        uuid.UUID
+	Attempt           int32
+	AttemptedAt       time.Time
+	Status            pgtype.Int4
+	Error             pgtype.Text
+	DurationMs        int32
+	Round             int32
+	TenantID          uuid.UUID
+	SignedWith        string
+	Forced            bool
+	Response          []byte
+	ResponseType      string
+	ResponseTruncated bool
 }
 
 type DeliveryState struct {

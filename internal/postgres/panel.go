@@ -14,6 +14,7 @@ import (
 
 	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres/db"
 )
 
@@ -273,7 +274,7 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 
 func (s *Store) RecordAttempt(
 	ctx context.Context, tenant, deliveryID uuid.UUID, attempt, status int,
-	signedWith []string, reason string, took time.Duration,
+	signedWith []string, answer outbound.Answer, reason string, took time.Duration,
 ) error {
 	ctx = authz.WithTenant(ctx, tenant)
 	lastStatus := pgtype.Int4{}
@@ -288,10 +289,22 @@ func (s *Store) RecordAttempt(
 		Error:      pgtype.Text{String: reason, Valid: reason != ""},
 		DurationMs: int32(took.Milliseconds()), //nolint:gosec // bounded by request timeout
 		SignedWith: strings.Join(signedWith, ", "),
+		Response:   answer.Body,
+		// A type longer than the column is a destination misbehaving, not a
+		// reason to lose the attempt.
+		ResponseType:      trimTo(answer.Type, 120),
+		ResponseTruncated: answer.Truncated,
 	}); err != nil {
 		return fmt.Errorf("recording attempt %d of delivery %s: %w", attempt, deliveryID, err)
 	}
 	return nil
+}
+
+func trimTo(value string, most int) string {
+	if len(value) <= most {
+		return value
+	}
+	return value[:most]
 }
 
 func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) ([]console.EventSummary, error) {
@@ -392,6 +405,10 @@ func (s *Store) EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]conso
 				DurationMs:  item.DurationMs,
 				SignedWith:  item.SignedWith,
 				Forced:      item.Forced,
+				Answer:      item.Response,
+				AnswerType:  item.ResponseType,
+
+				AnswerTruncated: item.ResponseTruncated,
 			}
 			if len(rounds) == 0 || rounds[len(rounds)-1].Number != item.Round {
 				rounds = append(rounds, console.Round{Number: item.Round})

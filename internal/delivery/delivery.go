@@ -21,7 +21,7 @@ type Queue interface {
 	MarkFailed(ctx context.Context, tenant, id uuid.UUID, nextAttempt time.Time,
 		status int, reason string, maxAttempts int) error
 	RecordAttempt(ctx context.Context, tenant, deliveryID uuid.UUID, attempt, status int,
-		signedWith []string,
+		signedWith []string, answer outbound.Answer,
 		reason string, took time.Duration) error
 	NextWorkAt(ctx context.Context) (time.Time, bool, error)
 	Notifications(ctx context.Context) <-chan struct{}
@@ -33,10 +33,13 @@ type Config struct {
 	BatchSize      int
 	SafetyInterval time.Duration
 	RequestTimeout time.Duration
-	MaxAttempts    int
-	BackoffBase    time.Duration
-	BackoffCap     time.Duration
-	Logger         *slog.Logger
+	// MaxResponseBytes is how much of what a destination says back is kept on
+	// the attempt. Zero takes the default.
+	MaxResponseBytes int64
+	MaxAttempts      int
+	BackoffBase      time.Duration
+	BackoffCap       time.Duration
+	Logger           *slog.Logger
 }
 
 type Dispatcher struct {
@@ -194,7 +197,7 @@ func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 	}
 
 	if recErr := d.queue.RecordAttempt(ctx, item.Tenant, item.ID, attempts, result.Status,
-		result.Signed, detail, took); recErr != nil {
+		result.Signed, result.Answer, detail, took); recErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a delivery attempt",
 			"delivery_id", item.ID, "error", recErr)
 	}
@@ -249,7 +252,10 @@ func (d *Dispatcher) transport(item outbound.Delivery) outbound.Transport {
 		return built
 	}
 
-	built = d.cfg.Transports.Build(kind, Options{RequestTimeout: d.cfg.RequestTimeout})
+	built = d.cfg.Transports.Build(kind, Options{
+		RequestTimeout:   d.cfg.RequestTimeout,
+		MaxResponseBytes: d.cfg.MaxResponseBytes,
+	})
 
 	d.mu.Lock()
 	d.byKind[kind] = built

@@ -7,6 +7,7 @@ import (
 
 	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/inbound"
+	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
@@ -123,7 +124,7 @@ func TestADeliveryIsMarkedInItsOwnTenant(t *testing.T) {
 	}
 
 	if err := store.RecordAttempt(ctx, item.Tenant, item.ID, 1, 200,
-		[]string{}, "", time.Second); err != nil {
+		[]string{}, outbound.Answer{}, "", time.Second); err != nil {
 		t.Fatalf("recording the attempt: %v", err)
 	}
 	if err := store.MarkDelivered(ctx, item.Tenant, item.ID, 200); err != nil {
