@@ -22,6 +22,16 @@ func Presets() []Preset {
 			},
 		},
 		{
+			Name: "charon",
+			Description: "X-Charon-Signature as Charon signs what it delivers, " +
+				"for one Charon in front of another",
+			Settings: Settings{
+				Verifier: HMAC, Scheme: Advanced, Algorithm: SHA256, Encoding: Hex,
+				Header: "X-Charon-Signature", TimestampKey: "t", SignatureKey: "v1",
+				Tolerance: 5 * time.Minute,
+			},
+		},
+		{
 			Name:        "github",
 			Description: "X-Hub-Signature-256 in hex, signed over the body",
 			Settings: Settings{
