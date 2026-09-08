@@ -229,9 +229,46 @@ func (s *Store) ProviderChanges(ctx context.Context) <-chan struct{} {
 	return s.listenOn(ctx, "charon_provider")
 }
 
-// Recheck runs verification again over the requests of a provider that were
-// recorded as invalid or missing, and reopens planning for the ones that now
-// pass. This is the way back from a secret that was configured wrong.
+// Reconsider does that for every provider of every tenant that has settings,
+// which is what a change to any of them calls for: whoever configured one just
+// answered a question that was open for everything already recorded under it.
+//
+// Bounded per provider, because a deployment that configures verification a
+// year in is asking about a year of requests, and the ones still waiting to be
+// delivered are the ones the answer changes anything for.
+func (s *Store) Reconsider(ctx context.Context, batch int32) (int, error) {
+	tenants, err := s.Tenants(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var recovered int
+	for _, tenant := range tenants {
+		scope := authz.WithTenant(ctx, tenant.ID)
+
+		configured, err := s.Verification(scope)
+		if err != nil {
+			return recovered, err
+		}
+		for name := range configured {
+			count, err := s.Recheck(scope, name, batch)
+			if err != nil {
+				return recovered, err
+			}
+			recovered += count
+		}
+	}
+	return recovered, nil
+}
+
+// Recheck answers, for the requests of a provider that have no answer yet or
+// were refused, the question the settings in force can now answer, and reopens
+// planning for the ones that pass.
+//
+// A request recorded before any verification existed is unchecked, which is
+// not a verdict but the absence of one: nothing was configured, so nothing was
+// asked. Configuring it later is what makes the question askable, which is why
+// unchecked is reconsidered and not left as though it had been decided.
 func (s *Store) Recheck(
 	ctx context.Context, name string, batch int32,
 ) (recovered int, err error) {
