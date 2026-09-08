@@ -36,13 +36,13 @@ delete from panel_session where token = $1;
 delete from panel_session where expires_at <= now();
 
 -- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms)
-select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6
 from delivery d
 where d.id = $1;
 
 -- name: DeliveryAttempts :many
-select round, attempt, attempted_at, status, error, duration_ms
+select round, attempt, attempted_at, status, error, duration_ms, signed_with
 from delivery_attempt
 where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc;

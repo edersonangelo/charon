@@ -220,7 +220,7 @@ func (q *Queries) DeleteRoute(ctx context.Context, arg DeleteRouteParams) error 
 }
 
 const deliveryAttempts = `-- name: DeliveryAttempts :many
-select round, attempt, attempted_at, status, error, duration_ms
+select round, attempt, attempted_at, status, error, duration_ms, signed_with
 from delivery_attempt
 where delivery_id = $1 and tenant_id = $2
 order by round desc, attempted_at desc
@@ -238,6 +238,7 @@ type DeliveryAttemptsRow struct {
 	Status      pgtype.Int4
 	Error       pgtype.Text
 	DurationMs  int32
+	SignedWith  string
 }
 
 func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error) {
@@ -256,6 +257,7 @@ func (q *Queries) DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsPara
 			&i.Status,
 			&i.Error,
 			&i.DurationMs,
+			&i.SignedWith,
 		); err != nil {
 			return nil, err
 		}
@@ -887,8 +889,8 @@ func (q *Queries) ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlrea
 }
 
 const recordDeliveryAttempt = `-- name: RecordDeliveryAttempt :exec
-insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms)
-select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5
+insert into delivery_attempt (tenant_id, delivery_id, attempt, round, status, error, duration_ms, signed_with)
+select d.tenant_id, $1, $2, d.replay_count, $3, $4, $5, $6
 from delivery d
 where d.id = $1
 `
@@ -899,6 +901,7 @@ type RecordDeliveryAttemptParams struct {
 	Status     pgtype.Int4
 	Error      pgtype.Text
 	DurationMs int32
+	SignedWith string
 }
 
 func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error {
@@ -908,6 +911,7 @@ func (q *Queries) RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryA
 		arg.Status,
 		arg.Error,
 		arg.DurationMs,
+		arg.SignedWith,
 	)
 	return err
 }

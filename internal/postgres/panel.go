@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -270,7 +271,8 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 }
 
 func (s *Store) RecordAttempt(
-	ctx context.Context, deliveryID uuid.UUID, attempt, status int, reason string, took time.Duration,
+	ctx context.Context, deliveryID uuid.UUID, attempt, status int,
+	signedWith []string, reason string, took time.Duration,
 ) error {
 	lastStatus := pgtype.Int4{}
 	if status > 0 {
@@ -283,6 +285,7 @@ func (s *Store) RecordAttempt(
 		Status:     lastStatus,
 		Error:      pgtype.Text{String: reason, Valid: reason != ""},
 		DurationMs: int32(took.Milliseconds()), //nolint:gosec // bounded by request timeout
+		SignedWith: strings.Join(signedWith, ", "),
 	}); err != nil {
 		return fmt.Errorf("recording attempt %d of delivery %s: %w", attempt, deliveryID, err)
 	}
@@ -383,6 +386,7 @@ func (s *Store) EventDeliveries(ctx context.Context, eventID uuid.UUID) ([]conso
 				Status:      item.Status.Int32,
 				Error:       item.Error.String,
 				DurationMs:  item.DurationMs,
+				SignedWith:  item.SignedWith,
 			}
 			if len(rounds) == 0 || rounds[len(rounds)-1].Number != item.Round {
 				rounds = append(rounds, console.Round{Number: item.Round})
@@ -499,6 +503,10 @@ func (s *Store) DetailedRoutes(ctx context.Context) ([]console.RouteRow, error) 
 
 	routes := make([]console.RouteRow, 0, len(rows))
 	for _, row := range rows {
+		signing, signErr := s.SigningFor(ctx, row.DestinationID)
+		if signErr != nil {
+			return nil, signErr
+		}
 		routes = append(routes, console.RouteRow{
 			ID:            row.ID,
 			Provider:      row.Provider,
@@ -508,6 +516,7 @@ func (s *Store) DetailedRoutes(ctx context.Context) ([]console.RouteRow, error) 
 			URL:           row.Url,
 			Enabled:       row.Enabled,
 			Deliveries:    row.Deliveries,
+			Signing:       signing,
 		})
 	}
 	return routes, nil

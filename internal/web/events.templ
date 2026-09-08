@@ -257,7 +257,7 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 					<div class="scroll attempts">
 						<table>
 							<thead>
-								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>error</th></tr>
+								<tr><th>attempt</th><th>at</th><th>status</th><th>took</th><th>signed with</th><th>error</th></tr>
 							</thead>
 							<tbody>
 								for _, attempt := range round.Attempts {
@@ -272,6 +272,13 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 											}
 										</td>
 										<td>{ fmt.Sprintf("%d ms", attempt.DurationMs) }</td>
+										<td class="wrap">
+											if attempt.SignedWith == "" {
+												<span class="muted">unsigned</span>
+											} else {
+												<code>{ attempt.SignedWith }</code>
+											}
+										</td>
 										<td class="wrap">{ attempt.Error }</td>
 									</tr>
 								}
@@ -449,10 +456,31 @@ templ transportChoice(transports []string) {
 	}
 }
 
-templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider, transports []string) {
+templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider, unsigned []console.UnsignedDestination, transports []string) {
 	<div id="routes">
 		@settingsNav("/routes")
 		<h1>Routes</h1>
+		if len(unsigned) > 0 {
+			<section class="attention">
+				<h2>Delivered without a signature</h2>
+				<p class="muted">
+					These destinations receive deliveries that carry no proof they came from here,
+					so anything that reaches their address looks the same to them. Give one a
+					secret in <a href="/routes">settings</a> with <code>charon sign add</code>.
+				</p>
+				<table>
+					<thead><tr><th>destination</th><th>routes</th></tr></thead>
+					<tbody>
+						for _, destination := range unsigned {
+							<tr>
+								<td><strong>{ destination.Name }</strong></td>
+								<td>{ counted(int(destination.Routes), "route") }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
 		if len(unrouted) > 0 {
 			<section class="attention">
 				<h2>Received, but going nowhere</h2>
@@ -503,7 +531,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 			} else {
 				<table>
 					<thead>
-						<tr><th>provider</th><th>destination</th><th>transport</th><th>url</th><th>deliveries</th><th></th></tr>
+						<tr><th>provider</th><th>destination</th><th>transport</th><th>signing</th><th>url</th><th>deliveries</th><th></th></tr>
 					</thead>
 					<tbody>
 						for _, route := range routes {
@@ -511,6 +539,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 								<td>{ route.Provider }</td>
 								<td>{ route.Destination }</td>
 								<td>{ route.Transport }</td>
+								<td>@signingState(route.Signing)</td>
 								<td colspan="3">
 									if may(ctx, authz.RoutesWrite) {
 										<form hx-post={ "/routes/" + route.ID.String() + "/save" }
@@ -528,6 +557,9 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 														hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
 														hx-confirm={ fmt.Sprintf("Resend all %d deliveries to this destination? Each one will be posted again.", route.Deliveries) }>resend</button>
 											}
+											<button hx-post={ "/routes/" + route.ID.String() + "/test" }
+													hx-target="body" hx-swap="outerHTML" hx-push-url="true"
+													title="deliver one synthetic event to this destination, through the dispatcher, signed exactly as a real one would be">test</button>
 											<button hx-post={ "/routes/" + route.ID.String() + "/delete" }
 													hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
 													hx-confirm="Remove this route? Deliveries already recorded are kept.">remove</button>
@@ -560,6 +592,30 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 			</section>
 		}
 	</div>
+}
+
+// What a destination signs with, and whether the process that delivers can
+// actually read it. Unread is not the same as unreadable: until the dispatcher
+// has looked, nothing here is entitled to claim either way.
+templ signingState(secrets []console.SigningSecret) {
+	if len(secrets) == 0 {
+		<span class="pill">unsigned</span>
+	} else {
+		for _, secret := range secrets {
+			<div class="signing">
+				<code>{ secret.Reference }</code>
+				switch {
+					case !secret.Checked:
+						<span class="muted" title="the dispatcher has not reported on this one yet">not read yet</span>
+					case secret.Readable:
+						<span class="pill good" title={ "read " + stamp(secret.CheckedAt) }>readable</span>
+					default:
+						<span class="pill bad" title={ secret.Detail }>unreadable</span>
+				}
+				<span class="muted">added { stamp(secret.Added) }</span>
+			</div>
+		}
+	}
 }
 
 // Bodies are stored verbatim and shown verbatim. Indenting here is a reading

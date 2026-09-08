@@ -77,6 +77,8 @@ type Store interface {
 	ReplayDelivery(ctx context.Context, id uuid.UUID) (int64, error)
 	UnroutedProviders(ctx context.Context) ([]console.UnroutedProvider, error)
 	DetailedRoutes(ctx context.Context) ([]console.RouteRow, error)
+	Unsigned(ctx context.Context) ([]console.UnsignedDestination, error)
+	SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, error)
 	AddRoute(ctx context.Context, provider, destination, url, transport string) error
 	SaveRoute(ctx context.Context, routeID uuid.UUID, url string, enabled bool) error
 	DeleteRoute(ctx context.Context, routeID uuid.UUID) error
@@ -166,6 +168,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /routes/{id}/save", h.allowed(authz.RoutesWrite, h.saveRoute))
 	mux.Handle("POST /routes/{id}/delete", h.allowed(authz.RoutesWrite, h.deleteRoute))
 	mux.Handle("POST /routes/{id}/resend", h.allowed(authz.EventsReplay, h.resendRoute))
+	mux.Handle("POST /routes/{id}/test", h.allowed(authz.RoutesWrite, h.testRoute))
 	mux.Handle("GET /verification", h.allowed(authz.VerificationRead, h.verification))
 	mux.Handle("POST /verification", h.allowed(authz.VerificationWrite, h.setVerification))
 	mux.Handle("POST /verification/{name}/remove",
@@ -571,6 +574,27 @@ func (h *Handler) replayDelivery(w http.ResponseWriter, r *http.Request) {
 	h.respondAfterReplay(w, r, event)
 }
 
+// A test event goes through the same path a real one does, which is the only
+// way the answer means anything: the panel cannot sign, so a request it sent
+// itself would prove the opposite of what was asked.
+func (h *Handler) testRoute(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	event, err := h.store.SendTest(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "sent a test delivery",
+		"route_id", id, "event_id", event, "by", currentUser(r).Email)
+
+	http.Redirect(w, r, "/events/"+event.String(), http.StatusSeeOther)
+}
+
 func (h *Handler) routes(w http.ResponseWriter, r *http.Request) {
 	routes, err := h.store.DetailedRoutes(r.Context())
 	if err != nil {
@@ -582,7 +606,12 @@ func (h *Handler) routes(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.page(w, r, "Routes", routesPage(routes, unrouted, h.transports.Kinds()))
+	unsigned, err := h.store.Unsigned(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.page(w, r, "Routes", routesPage(routes, unrouted, unsigned, h.transports.Kinds()))
 }
 
 func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {

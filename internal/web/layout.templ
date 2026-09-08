@@ -71,6 +71,10 @@ templ layout(title string, user string, summary Summary) {
 				.pill { padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 999px;
 				        font-size: .8rem; margin-left: .4rem; white-space: nowrap }
 				.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }
+				.pill.good { color: #2a7 } .pill.bad { color: #d44 }
+				.signing { display: flex; align-items: baseline; gap: .35rem;
+				           font-size: .85rem; white-space: nowrap }
+				.signing + .signing { margin-top: .2rem }
 				.muted { color: var(--muted) }
 				p.grants { display: flex; flex-wrap: wrap; align-items: baseline;
 				           gap: .25rem .9rem; margin: .5rem 0 0 }

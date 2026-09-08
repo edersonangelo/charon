@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"slices"
@@ -64,7 +65,55 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	go reportWhatCanBeSigned(ctx, store, logger)
+
 	return dispatcher.Run(ctx)
+}
+
+// The panel cannot tell whether a signing secret is readable: it runs in
+// another process, with another environment and another filesystem. So the
+// process that actually signs says so, on the interval a secret can move
+// underneath it — a file rewritten in place rotates without anything here
+// noticing until it is read again.
+const signingReport = time.Minute
+
+func reportWhatCanBeSigned(ctx context.Context, store *postgres.Store, logger *slog.Logger) {
+	report := func() {
+		references, err := store.EveryReference(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				logger.ErrorContext(ctx, "could not read the signing secrets", "error", err)
+			}
+			return
+		}
+		for _, reference := range references {
+			if err := store.RecordReading(ctx, reference, delivery.CanRead(reference.Reference)); err != nil {
+				if ctx.Err() == nil {
+					logger.ErrorContext(ctx, "could not record a signing secret reading",
+						"reference", reference.Reference, "error", err)
+				}
+			}
+		}
+	}
+
+	report()
+
+	changes := store.SigningChanges(ctx)
+	ticker := time.NewTicker(signingReport)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, open := <-changes:
+			if !open {
+				return
+			}
+			report()
+		case <-ticker.C:
+			report()
+		}
+	}
 }
 
 var errRouteUsage = errors.New("usage: charon route add -provider <name> -url <url> " +
@@ -179,8 +228,12 @@ func routeList(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if !r.Enabled {
 			state = "disabled"
 		}
-		if _, err := fmt.Fprintf(stdout, "%-20s %-20s %-8s %-8s %s\n",
-			r.Provider, r.Destination, r.Transport, state, r.URL); err != nil {
+		signing := "unsigned"
+		if r.Signed > 0 {
+			signing = fmt.Sprintf("signed(%d)", r.Signed)
+		}
+		if _, err := fmt.Fprintf(stdout, "%-20s %-20s %-8s %-8s %-10s %s\n",
+			r.Provider, r.Destination, r.Transport, state, signing, r.URL); err != nil {
 			return err
 		}
 	}
