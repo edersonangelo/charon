@@ -72,16 +72,22 @@ templ layout(title string, user string, summary Summary) {
 				        font-size: .8rem; margin-left: .4rem; white-space: nowrap }
 				.delivered { color: #2a7 } .dead { color: #d44 } .pending { color: #c92 }
 				.pill.good { color: #2a7 } .pill.bad { color: #d44 }
+				/* The trigger sits at the right end of the toolbar, so the menu hangs
+				   from its right edge: anchored the other way it runs off the page. */
 				details.actions { display: inline-block; position: relative }
 				details.actions > summary { list-style: none; cursor: pointer;
-				                            padding: .15rem .5rem; border: 1px solid var(--line);
-				                            border-radius: 3px; font-size: .9rem }
+				                            padding: .15rem .5rem; font-size: .9rem;
+				                            border: 1px solid var(--line); border-radius: 3px }
 				details.actions > summary::-webkit-details-marker { display: none }
-				details.actions > div { position: absolute; right: 0; z-index: 5; width: 34rem;
-				                        margin-top: .35rem; padding: .75rem;
+				details.actions .menu { position: absolute; right: 0; top: calc(100% + .35rem);
+				                        z-index: 20; padding: .35rem; white-space: nowrap;
 				                        border: 1px solid var(--line); border-radius: 4px;
 				                        background: Canvas }
-				details.actions p { margin: .5rem 0 0 }
+				details.actions .menu button { display: block; width: 100%; text-align: left }
+				/* The toolbar is a form, so the menu has to sit in it as one more
+				   control rather than on a line of its own below it. */
+				form.filters details.actions { margin-left: auto }
+
 				.signing { display: flex; align-items: baseline; gap: .35rem;
 				           font-size: .85rem; white-space: nowrap }
 				.signing + .signing { margin-top: .2rem }
@@ -111,6 +117,16 @@ templ layout(title string, user string, summary Summary) {
 				                     padding: .6rem 1rem; border-bottom: 1px solid var(--line) }
 				#detail-body { flex: 1 1 auto; overflow: auto; padding: 1rem 1.25rem;
 				               overscroll-behavior: contain }
+				/* Narrower than the detail modal, because it holds one question. The
+				   anatomy is the same one the page already uses. */
+				#why { width: min(34rem, 92vw) }
+				#why .modal-body { padding: 1rem 1.25rem }
+				#why h2 { margin: 0 0 .35rem; color: CanvasText;
+				          text-transform: none; letter-spacing: normal; font-size: .95rem }
+				#why p { margin: 0 0 .9rem; font-size: .85rem; line-height: 1.45 }
+				#why label { display: block; font-size: .85rem; color: var(--muted) }
+				#why input[type=text] { display: block; width: 100%; margin: .25rem 0 1rem }
+				#why .row { display: flex; justify-content: flex-end }
 				.scroll { max-width: 100%; overflow: auto }
 				.scroll.attempts { max-height: 15rem; overscroll-behavior: contain }
 				.scroll.attempts thead th { position: sticky; top: 0; z-index: 1;
