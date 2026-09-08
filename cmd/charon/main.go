@@ -22,6 +22,7 @@ Commands:
   route     Manage where a provider's events are delivered
   user      Create an operator who can sign in to the panel
   verify    Configure how a provider's signature is checked
+  sign      Configure how deliveries leaving here are signed
   tenant    Manage the tenants events are recorded for
   role      Manage roles, what they grant and who gets them
   migrate   Apply pending schema migrations and exit
@@ -58,6 +59,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return user(ctx, rest, stdout, stderr)
 	case "verify":
 		return verify(ctx, rest, stdout, stderr)
+	case "sign":
+		return sign(ctx, rest, stdout, stderr)
 	case "tenant":
 		return tenant(ctx, rest, stdout, stderr)
 	case "role":
