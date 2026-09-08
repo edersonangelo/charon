@@ -18,6 +18,7 @@ import (
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/health"
 	"github.com/edersonangelo/charon/internal/ingest"
+	"github.com/edersonangelo/charon/internal/metrics"
 	"github.com/edersonangelo/charon/internal/postgres"
 	"github.com/edersonangelo/charon/internal/provider"
 	"github.com/edersonangelo/charon/internal/web"
@@ -32,6 +33,7 @@ type serveConfig struct {
 	secureCookie        bool
 	sessionTTL          time.Duration
 	verificationRefresh time.Duration
+	metricsAddr         string
 	oidc                auth.OIDCSettings
 	policy              auth.Policy
 }
@@ -96,6 +98,10 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		Logger:       logger,
 	}).Register(mux)
 
+	if cfg.metricsAddr != "" {
+		go serveMetrics(watching, cfg.metricsAddr, store, logger)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.addr,
 		Handler:           mux,
@@ -109,6 +115,36 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 // Isolation between tenants is enforced by row level security, and Postgres
+// Metrics get a listener of their own rather than a route on the main one.
+// What they report is every tenant's counts at once, and the main listener is
+// the one the internet posts webhooks to: an operational endpoint does not
+// belong on a public port, and putting it behind the panel's sign-in would
+// make it unscrapable.
+func serveMetrics(
+	ctx context.Context, addr string, store *postgres.Store, logger *slog.Logger,
+) {
+	mux := http.NewServeMux()
+	metrics.New(store, version, logger).Register(mux)
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+
+	logger.InfoContext(ctx, "serving metrics", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.ErrorContext(ctx, "the metrics listener stopped", "error", err)
+	}
+}
+
 // The ways of signing in this deployment offers. Registering one is the whole
 // change: the panel routes and renders whatever is here.
 func signIn(cfg serveConfig, store *postgres.Store, logger *slog.Logger) *auth.Registry {
@@ -219,6 +255,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveConfig, error) {
 		"mark the panel session cookie Secure; turn on behind HTTPS")
 	fs.DurationVar(&cfg.sessionTTL, "session-ttl", 12*time.Hour,
 		"how long an operator stays signed in to the panel")
+	fs.StringVar(&cfg.metricsAddr, "metrics-addr", envOr("CHARON_METRICS_ADDR", ""),
+		"address to serve Prometheus metrics on; off when empty (env CHARON_METRICS_ADDR)")
 	fs.DurationVar(&cfg.verificationRefresh, "verification-refresh", time.Minute,
 		"longest the signature settings can be stale before being reloaded anyway")
 
