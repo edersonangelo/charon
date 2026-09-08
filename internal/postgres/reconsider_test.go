@@ -132,7 +132,7 @@ func TestWhatWasAlreadyDeliveredKeepsItsAnswer(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claiming: %v (%d)", err, len(claimed))
 	}
-	if err := store.MarkDelivered(ctx, claimed[0].ID, 200); err != nil {
+	if err := store.MarkDelivered(ctx, claimed[0].Tenant, claimed[0].ID, 200); err != nil {
 		t.Fatalf("marking delivered: %v", err)
 	}
 

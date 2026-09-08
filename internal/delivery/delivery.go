@@ -17,10 +17,10 @@ import (
 type Queue interface {
 	Plan(ctx context.Context, batch int) (int, error)
 	Claim(ctx context.Context, batch int, lease time.Duration) ([]outbound.Delivery, error)
-	MarkDelivered(ctx context.Context, id uuid.UUID, status int) error
-	MarkFailed(ctx context.Context, id uuid.UUID, nextAttempt time.Time,
+	MarkDelivered(ctx context.Context, tenant, id uuid.UUID, status int) error
+	MarkFailed(ctx context.Context, tenant, id uuid.UUID, nextAttempt time.Time,
 		status int, reason string, maxAttempts int) error
-	RecordAttempt(ctx context.Context, deliveryID uuid.UUID, attempt, status int,
+	RecordAttempt(ctx context.Context, tenant, deliveryID uuid.UUID, attempt, status int,
 		signedWith []string,
 		reason string, took time.Duration) error
 	NextWorkAt(ctx context.Context) (time.Time, bool, error)
@@ -193,14 +193,14 @@ func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 		detail = result.Detail
 	}
 
-	if recErr := d.queue.RecordAttempt(ctx, item.ID, attempts, result.Status,
+	if recErr := d.queue.RecordAttempt(ctx, item.Tenant, item.ID, attempts, result.Status,
 		result.Signed, detail, took); recErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a delivery attempt",
 			"delivery_id", item.ID, "error", recErr)
 	}
 
 	if result.Accepted {
-		if markErr := d.queue.MarkDelivered(ctx, item.ID, result.Status); markErr != nil {
+		if markErr := d.queue.MarkDelivered(ctx, item.Tenant, item.ID, result.Status); markErr != nil {
 			d.logger.ErrorContext(ctx, "could not record a delivery",
 				"delivery_id", item.ID, "error", markErr)
 		}
@@ -219,7 +219,7 @@ func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 
 	next := time.Now().UTC().Add(backoff(attempts, d.cfg.BackoffBase, d.cfg.BackoffCap))
 
-	if markErr := d.queue.MarkFailed(ctx, item.ID, next, result.Status, detail, limit); markErr != nil {
+	if markErr := d.queue.MarkFailed(ctx, item.Tenant, item.ID, next, result.Status, detail, limit); markErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a failed delivery",
 			"delivery_id", item.ID, "error", markErr)
 		return
