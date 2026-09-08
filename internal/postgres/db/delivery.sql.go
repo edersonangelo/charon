@@ -17,13 +17,15 @@ const claimDeliveries = `-- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => $1::float)
 where id in (
-    select id from delivery
-    where state = 'pending'
-      and next_attempt_at <= now()
-      and (leased_until is null or leased_until <= now())
-    order by next_attempt_at
+    select dl.id from delivery dl
+    join destination d on d.id = dl.destination_id
+    where dl.state = 'pending'
+      and dl.next_attempt_at <= now()
+      and (dl.leased_until is null or dl.leased_until <= now())
+      and d.enabled
+    order by dl.next_attempt_at
     limit $2
-    for update skip locked
+    for update of dl skip locked
 )
 returning id, event_id, destination_id, attempts, replay_count
 `
@@ -41,6 +43,10 @@ type ClaimDeliveriesRow struct {
 	ReplayCount   int32
 }
 
+// Switching a destination off pauses it. What is already waiting for it stays
+// waiting, keeping its attempts, instead of being spent against somewhere that
+// was deliberately taken out of service — which would leave a delivery dead by
+// the time it came back.
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, claimDeliveries, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -394,7 +400,9 @@ func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) error {
 const nextWorkAt = `-- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(next_attempt_at) from delivery where state = 'pending'),
+        (select min(dl.next_attempt_at) from delivery dl
+         join destination d on d.id = dl.destination_id
+         where dl.state = 'pending' and d.enabled),
         (select case when exists (
                     select 1 from inbound_event e
                     join route r on r.provider = e.provider

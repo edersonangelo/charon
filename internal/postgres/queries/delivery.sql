@@ -44,17 +44,23 @@ on conflict (event_id, destination_id) do nothing;
 -- name: MarkEventPlanned :exec
 update inbound_event set planned_at = now() where id = $1;
 
+-- Switching a destination off pauses it. What is already waiting for it stays
+-- waiting, keeping its attempts, instead of being spent against somewhere that
+-- was deliberately taken out of service — which would leave a delivery dead by
+-- the time it came back.
 -- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => sqlc.arg(lease_seconds)::float)
 where id in (
-    select id from delivery
-    where state = 'pending'
-      and next_attempt_at <= now()
-      and (leased_until is null or leased_until <= now())
-    order by next_attempt_at
+    select dl.id from delivery dl
+    join destination d on d.id = dl.destination_id
+    where dl.state = 'pending'
+      and dl.next_attempt_at <= now()
+      and (dl.leased_until is null or dl.leased_until <= now())
+      and d.enabled
+    order by dl.next_attempt_at
     limit sqlc.arg(batch_size)
-    for update skip locked
+    for update of dl skip locked
 )
 returning id, event_id, destination_id, attempts, replay_count;
 
@@ -96,7 +102,9 @@ select pg_notify('charon_work', '');
 -- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(next_attempt_at) from delivery where state = 'pending'),
+        (select min(dl.next_attempt_at) from delivery dl
+         join destination d on d.id = dl.destination_id
+         where dl.state = 'pending' and d.enabled),
         (select case when exists (
                     select 1 from inbound_event e
                     join route r on r.provider = e.provider
