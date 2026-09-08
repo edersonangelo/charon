@@ -9,6 +9,7 @@ charon dispatch   Deliver recorded events to their destinations
 charon route      Manage where a provider's events are delivered
 charon user       Create an operator who can sign in to the panel
 charon verify     Configure how a provider's signature is checked
+charon sign       Configure how deliveries leaving here are signed
 charon tenant     Manage the tenants events are recorded for
 charon role       Manage roles and what they grant
 charon migrate    Apply pending schema migrations and exit
@@ -127,7 +128,7 @@ accepted unchecked, exactly as before; once a verifier exists, a request whose
 signature does not match is still recorded and marked, and never delivered.
 
 ```sh
-export CHARON_SECRET_STRIPE='whsec_...'
+export CHARON_SECRET_STRIPE='whsec_...'   # or a line in .env, under compose
 charon verify set -provider stripe -preset stripe -secret-env CHARON_SECRET_STRIPE
 charon verify presets
 charon verify list
@@ -159,6 +160,42 @@ build are refused here rather than silently refusing every request later.
 `recheck` runs verification again over the requests of a provider that were
 recorded invalid or missing, and reopens the ones that now pass. It is the way
 back from a secret that was configured wrong.
+
+## sign
+
+How a delivery proves it came from Charon. Off until a destination has a
+secret, because signing for a receiver that is not checking yet only breaks
+deliveries.
+
+```sh
+charon sign generate
+charon sign add -destination billing -secret env:CHARON_SIGNING_BILLING
+charon sign add -destination billing -secret file:/run/secrets/billing
+charon sign list
+charon sign remove -destination billing -secret env:CHARON_SIGNING_BILLING
+```
+
+| flag | purpose |
+|---|---|
+| `-destination` | whose deliveries are signed |
+| `-secret` | where the secret is: `env:NAME` or `file:/path`, never the secret |
+| `-tenant` | which tenant the destination belongs to |
+
+The database holds the reference, never the secret. `file:` is read on every
+attempt, so a secret manager that rewrites the mounted file rotates it without
+restarting anything; `env:` is read by **`charon dispatch`**, which is a
+different process from `charon serve` and has a different environment.
+
+A destination signs with every secret it has, which is what makes rotation
+possible: both are live, the receiver accepts either, and the old one is
+removed once it is no longer needed. `charon sign list` shows when each was
+added.
+
+`generate` prints a secret of the right shape and the lines to run with it. It
+stores nothing.
+
+The format, and how to verify it on the receiving side, are in
+**[docs/signing.md](signing.md)**.
 
 ## tenant
 
@@ -249,3 +286,8 @@ docker compose run --rm -e CHARON_PASSWORD='...' charon user add -email you@exam
 `docker compose run` starts a throwaway container with the same environment as
 the service, which is why it needs no `-database-url`. Note that `-e` is
 required to pass a variable in: the shell's environment is not the container's.
+
+A secret is the same problem and `-e` is the wrong answer for it, because the
+process that reads it is `charon` or `dispatcher`, not the throwaway container.
+Both services read `.env` beside `docker-compose.yml`, so a secret goes there
+and takes effect on the next `docker compose up -d`.

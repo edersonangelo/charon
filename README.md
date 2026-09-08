@@ -111,14 +111,18 @@ A provider's signature is checked from stored parameters, not from code written
 for that provider. Presets cover the common ones:
 
 ```sh
-export CHARON_SECRET_STRIPE='whsec_...'
+echo "CHARON_SECRET_STRIPE=whsec_..." >> .env
+docker compose up -d
 docker compose run --rm charon verify set -provider stripe \
   -preset stripe -secret-env CHARON_SECRET_STRIPE
 docker compose run --rm charon verify presets
 docker compose run --rm charon verify list
 ```
 
-The database holds the name of the environment variable, never the secret. A
+The database holds the name of the environment variable, never the secret,
+which is why the secret goes in `.env` — the shell's environment is not the
+container's, and the process that checks signatures has to be the one that can
+read it. A
 provider that no preset fits is configured by its parameters instead —
 `-verifier`, `-scheme`, `-algorithm`, `-encoding`, `-header` — which is the
 same mechanism the presets are made of.
@@ -369,13 +373,15 @@ sending traffic to.
 | 3 | Operator panel: search, inspect, replay | done |
 | 4 | Signature verification | done |
 | 5 | Multiple tenants, configurable roles, administration in the panel | done |
-| 6 | Retention and purge, metrics | |
-| 7 | `v0.1.0` release | |
+| 6 | Signing what is delivered | done |
+| 7 | Retention and purge, metrics | |
+| 8 | `v0.1.0` release | |
 
 ## Documentation
 
 - [docs/command-line.md](docs/command-line.md) — every command and flag, and why each one is there
 - [docs/single-sign-on.md](docs/single-sign-on.md) — connecting an identity provider, and how it decides who lands where
+- [docs/signing.md](docs/signing.md) — proving a delivery came from Charon, and verifying it on the receiving side
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development setup, branching, commits
 
 ## Authorship
