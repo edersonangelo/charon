@@ -84,6 +84,12 @@ stopped without touching the port that receives.
 | `-max-response-bytes` | `16384` | how much of what a destination says back is kept on the attempt |
 | `-purge-every` | `1h` | how often to discard events past what their tenant keeps |
 
+`dispatch` does not apply migrations — `serve` does — so on a rollout it can
+come up first, against a schema the new build is ahead of. It waits for the
+migrations this build carries before it starts delivering, and says so once. A
+deployment where they never arrive is then one line in the log instead of an
+error about a missing column on every round.
+
 It does not poll on a fixed interval. A recorded event announces itself on
 commit, so a new one is picked up at once, and between rounds the process sleeps
 until the earliest retry is actually due. `-safety-interval` bounds that sleep,
@@ -121,6 +127,12 @@ charon route list
 | `-url` | — | where they are delivered |
 | `-destination` | the provider's name | a name for this destination |
 | `-transport` | `http` | kind of destination |
+
+An address is refused here as it is in the panel: it has to parse, have a host,
+and be `http` or `https`. Nothing is said about the path — a trailing slash is a
+real endpoint, and what belongs after the host is the receiver's business. A
+destination of another kind of transport is addressed however that transport
+addresses things, and this rule leaves it alone.
 | `-tenant` | `default` | which tenant this route belongs to |
 
 Correcting a destination's address tries what is waiting for it at once, with

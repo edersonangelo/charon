@@ -70,6 +70,10 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := waitForTheSchema(ctx, store, logger); err != nil {
+		return err
+	}
+
 	go reportWhatCanBeSigned(ctx, store, logger)
 	go purgeWhatIsNoLongerKept(ctx, store, *purgeEvery, logger)
 
@@ -118,6 +122,46 @@ func reportWhatCanBeSigned(ctx context.Context, store *postgres.Store, logger *s
 			report()
 		case <-ticker.C:
 			report()
+		}
+	}
+}
+
+// How often the loop looks again while the schema it needs is still being
+// applied elsewhere.
+const schemaCheck = 2 * time.Second
+
+// This process does not migrate — the one that serves does — so on a rollout it
+// can come up first and run new code against the old schema. Every round then
+// fails on a column that does not exist yet, which looks like a defect and is
+// really a deployment still in progress.
+//
+// So it waits, and says it is waiting. A deployment where the migration never
+// arrives is then obvious from one line instead of buried under errors.
+func waitForTheSchema(ctx context.Context, store *postgres.Store, logger *slog.Logger) error {
+	announced := false
+	for {
+		pending, err := store.Pending(ctx)
+		if err != nil {
+			return fmt.Errorf("reading what the schema is missing: %w", err)
+		}
+		if len(pending) == 0 {
+			if announced {
+				logger.InfoContext(ctx, "the schema is up to date, delivering")
+			}
+			return nil
+		}
+
+		if !announced {
+			logger.InfoContext(ctx,
+				"waiting for the schema this build needs, which another process applies",
+				"pending", len(pending), "first", pending[0])
+			announced = true
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(schemaCheck):
 		}
 	}
 }
