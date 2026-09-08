@@ -51,6 +51,7 @@ type DeliveryAttempt struct {
 	DurationMs  int32
 	Round       int32
 	TenantID    uuid.UUID
+	SignedWith  string
 }
 
 type DeliveryState struct {
@@ -160,6 +161,22 @@ type SchemaMigration struct {
 type SignatureState struct {
 	Name        string
 	Description string
+}
+
+type SigningSecret struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+	Reference     string
+	CreatedAt     time.Time
+}
+
+type SigningSecretCheck struct {
+	SigningSecretID uuid.UUID
+	TenantID        uuid.UUID
+	Readable        bool
+	Detail          string
+	CheckedAt       time.Time
 }
 
 type Tenant struct {

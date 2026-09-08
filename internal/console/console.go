@@ -172,6 +172,9 @@ type Attempt struct {
 	Status      int32
 	Error       string
 	DurationMs  int32
+	// SignedWith is what this attempt went out signed with, as it stood then.
+	// After a rotation the destination's current secrets no longer answer it.
+	SignedWith string
 }
 
 type RouteRow struct {
@@ -183,6 +186,27 @@ type RouteRow struct {
 	URL           string
 	Enabled       bool
 	Deliveries    int64
+	Signing       []SigningSecret
+}
+
+// One secret a destination signs with: where it is kept, when it was added,
+// and what the process that delivers last found when it tried to read it.
+// Whether it is readable is never decided here, because the panel does not run
+// where the signing happens.
+type SigningSecret struct {
+	Reference string
+	Added     time.Time
+	Checked   bool
+	Readable  bool
+	Detail    string
+	CheckedAt time.Time
+}
+
+// A destination that is delivered to and signs with nothing, which once
+// signing exists is a finding rather than a default.
+type UnsignedDestination struct {
+	Name   string
+	Routes int64
 }
 
 // A provider whose events have been recorded but that has no route at all, so

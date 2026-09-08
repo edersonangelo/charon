@@ -12,6 +12,7 @@ import (
 )
 
 type Querier interface {
+	AddSigningSecret(ctx context.Context, arg AddSigningSecretParams) error
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered. One that was
 	// never checked is: a provider with no verifier configured behaves as before.
@@ -45,6 +46,7 @@ type Querier interface {
 	DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
 	DestinationByName(ctx context.Context, arg DestinationByNameParams) (Destination, error)
+	DestinationsWithoutSigning(ctx context.Context, tenantID uuid.UUID) ([]DestinationsWithoutSigningRow, error)
 	DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error)
 	DistinctProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error)
 	EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error)
@@ -76,6 +78,8 @@ type Querier interface {
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
 	NotifyPanel(ctx context.Context) error
 	NotifyProviders(ctx context.Context) error
+	NotifySigning(ctx context.Context) error
+	NotifyTenants(ctx context.Context) error
 	NotifyWork(ctx context.Context) error
 	OldestPendingAge(ctx context.Context) (float64, error)
 	PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error)
@@ -88,10 +92,12 @@ type Querier interface {
 	ProviderAlreadyRoutedTo(ctx context.Context, arg ProviderAlreadyRoutedToParams) (bool, error)
 	Providers(ctx context.Context, tenantID uuid.UUID) ([]ProvidersRow, error)
 	RecordDeliveryAttempt(ctx context.Context, arg RecordDeliveryAttemptParams) error
+	RecordSigningCheck(ctx context.Context, arg RecordSigningCheckParams) error
 	RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]RefusedByProviderRow, error)
 	RegisterAuthMethod(ctx context.Context, name string) error
 	RegisterTransport(ctx context.Context, name string) error
 	RegisterVerifier(ctx context.Context, name string) error
+	RemoveSigningSecret(ctx context.Context, arg RemoveSigningSecretParams) (int64, error)
 	// A replay only reopens deliveries whose destination is still routed for this
 	// event's provider and still enabled. Anything else is history: the routes page
 	// is the truth about where events go.
@@ -114,6 +120,10 @@ type Querier interface {
 	SetSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
 	SetSystemAdminByEmail(ctx context.Context, email string) (int64, error)
 	SignatureTotals(ctx context.Context) ([]SignatureTotalsRow, error)
+	SigningFor(ctx context.Context, destinationID uuid.UUID) ([]SigningForRow, error)
+	SigningSecrets(ctx context.Context, tenantID uuid.UUID) ([]SigningSecretsRow, error)
+	SigningSecretsEverywhere(ctx context.Context) ([]SigningSecretsEverywhereRow, error)
+	SigningSecretsFor(ctx context.Context, destinationID uuid.UUID) ([]string, error)
 	StopPointingValue(ctx context.Context, arg StopPointingValueParams) error
 	SystemAdmins(ctx context.Context) ([]SystemAdminsRow, error)
 	TenantBySlug(ctx context.Context, slug string) (Tenant, error)
