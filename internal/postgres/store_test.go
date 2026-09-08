@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 	"github.com/edersonangelo/charon/internal/testsupport"
@@ -59,7 +60,13 @@ func TestRecordStoresTheRequestVerbatim(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
-	ctx := context.Background()
+	tenant, err := store.TenantBySlug(context.Background(), postgres.DefaultSlug)
+	if err != nil {
+		t.Fatalf("reading the default tenant: %v", err)
+	}
+	// Reading says which tenant, because a query that does not is answered for
+	// none of them, which is what keeps one tenant out of another's events.
+	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
 	body := []byte("{\n  \"z\": 1,\t\"a\": [2,3]  }\n\x00\xff")
 	req := request(body)

@@ -42,7 +42,8 @@ func TestTheDatabaseRefusesAnotherTenantEvenWhenTheQueryDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recording for the first tenant: %v", err)
 	}
-	if _, err := store.Record(ctx, yours); err != nil {
+	yoursID, err := store.Record(ctx, yours)
+	if err != nil {
 		t.Fatalf("recording for the second tenant: %v", err)
 	}
 
@@ -64,13 +65,21 @@ func TestTheDatabaseRefusesAnotherTenantEvenWhenTheQueryDoesNot(t *testing.T) {
 		t.Errorf("saw %d events, want only the one recorded for that tenant", len(found))
 	}
 
-	// Nothing said which tenant, so the database answers for none of them.
+	// Nothing said which tenant, so the database answers for the one every
+	// deployment has, exactly as the application resolves it. What it must
+	// never do is reach past that into somebody else's.
 	blind, err := confined.SearchEvents(ctx, console.Filter{})
 	if err != nil {
 		t.Fatalf("searching with no tenant: %v", err)
 	}
-	if len(blind) != 0 {
-		t.Errorf("a query for no tenant returned %d events, want none", len(blind))
+	for _, event := range blind {
+		if event.ID == yoursID {
+			t.Error("a query that named no tenant reached another tenant's events")
+		}
+	}
+	if len(blind) != 1 || blind[0].ID != mineID {
+		t.Errorf("a query for no tenant saw %d events, want the default tenant's one",
+			len(blind))
 	}
 }
 
