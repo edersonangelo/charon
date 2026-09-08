@@ -47,6 +47,11 @@ func withMethods(t *testing.T, policy auth.Policy, extra ...auth.Method) (*postg
 	if _, err := store.Migrate(ctx); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
+	// Serving does this on every start, and what it records is what decides
+	// whether an operator may do anything at all.
+	if err := store.Register(ctx, postgres.Kinds{}); err != nil {
+		t.Fatalf("registering: %v", err)
+	}
 
 	methods := auth.NewRegistry()
 	methods.Register(auth.NewPassword(credentials{store}))

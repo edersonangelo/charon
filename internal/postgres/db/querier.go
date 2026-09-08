@@ -110,6 +110,13 @@ type Querier interface {
 	RecordSigningCheck(ctx context.Context, arg RecordSigningCheckParams) error
 	RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]RefusedByProviderRow, error)
 	RegisterAuthMethod(ctx context.Context, name string) error
+	RegisterDeliveryState(ctx context.Context, arg RegisterDeliveryStateParams) error
+	RegisterPermission(ctx context.Context, arg RegisterPermissionParams) error
+	RegisterShippedGrant(ctx context.Context, arg RegisterShippedGrantParams) error
+	// A role Charon ships belongs to no tenant and is held in any. Its description
+	// is left alone once it exists, because a deployment is allowed to change it.
+	RegisterShippedRole(ctx context.Context, arg RegisterShippedRoleParams) (uuid.UUID, error)
+	RegisterSignatureState(ctx context.Context, arg RegisterSignatureStateParams) error
 	RegisterTransport(ctx context.Context, name string) error
 	RegisterVerifier(ctx context.Context, name string) error
 	RemoveSigningSecret(ctx context.Context, arg RemoveSigningSecretParams) (int64, error)
@@ -120,8 +127,13 @@ type Querier interface {
 	ReplayDestination(ctx context.Context, arg ReplayDestinationParams) (int64, error)
 	ReplayEvent(ctx context.Context, arg ReplayEventParams) (int64, error)
 	Retentions(ctx context.Context) ([]RetentionsRow, error)
+	// A tenant may define a role of its own under a name Charon also ships, and
+	// changing a shipped role is how that happens. Its own wins, said here rather
+	// than left to whichever row the database hands back first: deciding what
+	// somebody may do cannot depend on that.
 	Role(ctx context.Context, arg RoleParams) (RoleRow, error)
 	RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, error)
+	RoleHasAnyGrant(ctx context.Context, roleID uuid.UUID) (bool, error)
 	RoleIDByName(ctx context.Context, arg RoleIDByNameParams) (uuid.UUID, error)
 	Roles(ctx context.Context, tenantID pgtype.UUID) ([]RolesRow, error)
 	RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByIDRow, error)

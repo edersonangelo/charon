@@ -925,6 +925,88 @@ func (q *Queries) RegisterAuthMethod(ctx context.Context, name string) error {
 	return err
 }
 
+const registerDeliveryState = `-- name: RegisterDeliveryState :exec
+insert into delivery_state (name, description) values ($1, $2)
+on conflict (name) do nothing
+`
+
+type RegisterDeliveryStateParams struct {
+	Name        string
+	Description string
+}
+
+func (q *Queries) RegisterDeliveryState(ctx context.Context, arg RegisterDeliveryStateParams) error {
+	_, err := q.db.Exec(ctx, registerDeliveryState, arg.Name, arg.Description)
+	return err
+}
+
+const registerPermission = `-- name: RegisterPermission :exec
+insert into permission (name, description) values ($1, $2)
+on conflict (name) do update set description = excluded.description
+`
+
+type RegisterPermissionParams struct {
+	Name        string
+	Description string
+}
+
+func (q *Queries) RegisterPermission(ctx context.Context, arg RegisterPermissionParams) error {
+	_, err := q.db.Exec(ctx, registerPermission, arg.Name, arg.Description)
+	return err
+}
+
+const registerShippedGrant = `-- name: RegisterShippedGrant :exec
+insert into role_grant (role_id, permission_id)
+select $1, p.id from permission p where p.name = $2
+on conflict do nothing
+`
+
+type RegisterShippedGrantParams struct {
+	RoleID uuid.UUID
+	Name   string
+}
+
+func (q *Queries) RegisterShippedGrant(ctx context.Context, arg RegisterShippedGrantParams) error {
+	_, err := q.db.Exec(ctx, registerShippedGrant, arg.RoleID, arg.Name)
+	return err
+}
+
+const registerShippedRole = `-- name: RegisterShippedRole :one
+insert into role (tenant_id, name, description, built_in)
+values (null, $1, $2, true)
+on conflict (tenant_id, name) do update set built_in = true
+returning id
+`
+
+type RegisterShippedRoleParams struct {
+	Name        string
+	Description string
+}
+
+// A role Charon ships belongs to no tenant and is held in any. Its description
+// is left alone once it exists, because a deployment is allowed to change it.
+func (q *Queries) RegisterShippedRole(ctx context.Context, arg RegisterShippedRoleParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, registerShippedRole, arg.Name, arg.Description)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const registerSignatureState = `-- name: RegisterSignatureState :exec
+insert into signature_state (name, description) values ($1, $2)
+on conflict (name) do nothing
+`
+
+type RegisterSignatureStateParams struct {
+	Name        string
+	Description string
+}
+
+func (q *Queries) RegisterSignatureState(ctx context.Context, arg RegisterSignatureStateParams) error {
+	_, err := q.db.Exec(ctx, registerSignatureState, arg.Name, arg.Description)
+	return err
+}
+
 const registerTransport = `-- name: RegisterTransport :exec
 insert into transport (name) values ($1) on conflict (name) do nothing
 `
@@ -1061,6 +1143,8 @@ left join role_grant g on g.role_id = r.id
 left join permission p on p.id = g.permission_id
 where (r.tenant_id is null or r.tenant_id = $1) and r.name = $2
 group by r.id, r.name, r.description, r.built_in
+order by (r.tenant_id is null)
+limit 1
 `
 
 type RoleParams struct {
@@ -1075,6 +1159,10 @@ type RoleRow struct {
 	Grants      []string
 }
 
+// A tenant may define a role of its own under a name Charon also ships, and
+// changing a shipped role is how that happens. Its own wins, said here rather
+// than left to whichever row the database hands back first: deciding what
+// somebody may do cannot depend on that.
 func (q *Queries) Role(ctx context.Context, arg RoleParams) (RoleRow, error) {
 	row := q.db.QueryRow(ctx, role, arg.TenantID, arg.Name)
 	var i RoleRow
@@ -1101,6 +1189,17 @@ func (q *Queries) RoleByID(ctx context.Context, id uuid.UUID) (RoleByIDRow, erro
 	var i RoleByIDRow
 	err := row.Scan(&i.TenantID, &i.Name)
 	return i, err
+}
+
+const roleHasAnyGrant = `-- name: RoleHasAnyGrant :one
+select exists (select 1 from role_grant where role_id = $1)
+`
+
+func (q *Queries) RoleHasAnyGrant(ctx context.Context, roleID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, roleHasAnyGrant, roleID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const roleIDByName = `-- name: RoleIDByName :one
