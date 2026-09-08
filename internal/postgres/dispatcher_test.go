@@ -138,3 +138,60 @@ func TestADeliveryIsMarkedInItsOwnTenant(t *testing.T) {
 		t.Errorf("states are %v, want one delivered", states)
 	}
 }
+
+// A tenant with more waiting than one batch holds must not take every round.
+// The budget is spread across tenants, so whoever leads takes it all and the
+// rest are only reached because the lead moves on.
+func TestABusyTenantDoesNotStarveTheOthers(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := context.Background()
+
+	// "aaa" comes first in every ordering the database is likely to return.
+	busy, err := store.CreateTenant(ctx, "aaa-busy", "Busy")
+	if err != nil {
+		t.Fatalf("creating the busy tenant: %v", err)
+	}
+	quiet, err := store.CreateTenant(ctx, "zzz-quiet", "Quiet")
+	if err != nil {
+		t.Fatalf("creating the quiet tenant: %v", err)
+	}
+
+	busyCtx := authz.WithTenant(ctx, busy.ID)
+	if err := store.AddRoute(busyCtx, "loud", "loud-sink",
+		"https://sink.example/loud", "http"); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+	// More than every round of the loop below can consume, so the busy tenant
+	// never runs out and the quiet one is only reached by the lead moving on.
+	for range 20 {
+		if _, err := store.Record(busyCtx, inbound.Request{
+			Provider:   "loud",
+			Path:       "/webhooks/loud",
+			ReceivedAt: time.Now().UTC().Truncate(time.Microsecond),
+			Headers:    map[string][]string{"Content-Type": {"application/json"}},
+			Body:       []byte(`{"n":1}`),
+		}); err != nil {
+			t.Fatalf("recording: %v", err)
+		}
+	}
+
+	waiting(authz.WithTenant(ctx, quiet.ID), t, store, "soft")
+
+	// A batch far smaller than what the busy tenant has waiting. However the
+	// tenants are ordered, a few rounds have to reach the quiet one.
+	for range 4 {
+		if _, err := store.Plan(ctx, 2); err != nil {
+			t.Fatalf("planning: %v", err)
+		}
+	}
+
+	states, err := store.DeliveryStates(authz.WithTenant(ctx, quiet.ID))
+	if err != nil {
+		t.Fatalf("counting the quiet tenant's deliveries: %v", err)
+	}
+	if states["pending"] == 0 {
+		t.Error("the quiet tenant was never reached: a busy one took every round")
+	}
+}
