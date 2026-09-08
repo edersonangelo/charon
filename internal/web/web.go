@@ -78,6 +78,7 @@ type Store interface {
 	UnroutedProviders(ctx context.Context) ([]console.UnroutedProvider, error)
 	DetailedRoutes(ctx context.Context) ([]console.RouteRow, error)
 	Unsigned(ctx context.Context) ([]console.UnsignedDestination, error)
+	Force(ctx context.Context, operator uuid.UUID, reason string, events []uuid.UUID) (int64, error)
 	SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, error)
 	AddRoute(ctx context.Context, provider, destination, url, transport string) error
 	SaveRoute(ctx context.Context, routeID uuid.UUID, url string, enabled bool) error
@@ -157,6 +158,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /events/{id}", h.allowed(authz.EventsRead, h.event))
 	mux.Handle("GET /events/{id}/fragment", h.allowed(authz.EventsRead, h.eventFragment))
 	mux.Handle("POST /events/{id}/replay", h.allowed(authz.EventsReplay, h.replayEvent))
+	mux.Handle("POST /events/force", h.allowed(authz.EventsForce, h.forceEvents))
 	mux.Handle("POST /events/{eventID}/deliveries/{id}/replay",
 		h.allowed(authz.EventsReplay, h.replayDelivery))
 	mux.Handle("GET /settings", h.allowed(authz.EventsRead, h.settings))
@@ -517,6 +519,44 @@ func (h *Handler) renderEvent(w http.ResponseWriter, r *http.Request, id uuid.UU
 		return
 	}
 	h.page(w, r, detail.Provider, eventPage(detail, deliveries))
+}
+
+// Delivering something whose signature failed is a decision, not a retry, so
+// it asks for a reason and records who gave it. One reason covers everything
+// ticked, because an operator who has just worked out why a batch failed is
+// explaining the batch, not each of them.
+func (h *Handler) forceEvents(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	chosen := r.PostForm["event"]
+	events := make([]uuid.UUID, 0, len(chosen))
+	for _, raw := range chosen {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			http.Error(w, "one of those is not an event", http.StatusBadRequest)
+			return
+		}
+		events = append(events, id)
+	}
+
+	reason := r.PostForm.Get("reason")
+	forced, err := h.store.Force(r.Context(), currentUser(r).ID, reason, events)
+	switch {
+	case errors.Is(err, postgres.ErrNoReason), errors.Is(err, postgres.ErrNothingToForce):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		h.fail(w, r, err)
+		return
+	}
+
+	h.logger.WarnContext(r.Context(), "delivering events whose signature failed",
+		"events", forced, "reason", reason, "by", currentUser(r).Email)
+
+	http.Redirect(w, r, "/events", http.StatusSeeOther)
 }
 
 func (h *Handler) replayEvent(w http.ResponseWriter, r *http.Request) {

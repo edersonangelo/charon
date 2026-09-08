@@ -8,6 +8,7 @@ charon serve      Accept inbound webhooks and record them
 charon dispatch   Deliver recorded events to their destinations
 charon route      Manage where a provider's events are delivered
 charon user       Create an operator who can sign in to the panel
+charon events     Act on recorded events
 charon verify     Configure how a provider's signature is checked
 charon sign       Configure how deliveries leaving here are signed
 charon tenant     Manage the tenants events are recorded for
@@ -124,6 +125,43 @@ providers this tenant already knows, so a near miss is visible at once:
 routed stipe to stipe (https://api.internal/webhooks/stripe)
 warning: nothing has arrived for "stipe" and it has no verification configured; this tenant already knows github, stripe
 ```
+
+## events
+
+### force
+
+Delivers events whose signature failed. Charon never does this on its own: a
+proof that does not match is refused and stays refused, and this is an operator
+saying, on the record, that this batch is genuine anyway.
+
+```sh
+charon events force -by you@example.com \
+  -reason 'the sender rotated its token without telling us' \
+  -id 01a0... -id 01a1...
+```
+
+| flag | purpose |
+|---|---|
+| `-by` | the operator taking the decision, by the address they sign in with |
+| `-reason` | why, in at least ten characters; it is stored and shown for ever |
+| `-id` | an event to deliver; give it once per event |
+| `-tenant` | which tenant the events belong to |
+
+**The verdict is not rewritten.** The event stays `invalid` or `missing`, and
+gains a record of who let it through and why. What the signature said and what
+an operator decided are different things and both stay readable — on the event
+page, and on every attempt it produced.
+
+One reason covers the whole batch, because somebody who has worked out why a
+group of requests failed is explaining the group. Only a request that was
+checked and refused can be overruled: there is nothing to overrule on one that
+passed, or on one nothing was configured to check.
+
+It needs `events.force`, which `admin` and `owner` hold and `operator` and
+`viewer` do not. Passing a security check is not implied by being allowed to
+send something again.
+
+In the panel it is on the events list: tick what to send, say why, once.
 
 ## verify
 
