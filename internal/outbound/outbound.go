@@ -3,7 +3,12 @@ package outbound
 import "github.com/google/uuid"
 
 type Delivery struct {
-	ID       uuid.UUID
+	ID uuid.UUID
+	// Tenant is whose delivery this is. It travels with it because everything
+	// done about it afterwards — recording the attempt, marking it delivered
+	// or failed — is confined to that tenant, and the loop that does those
+	// things handles every tenant at once.
+	Tenant   uuid.UUID
 	EventID  uuid.UUID
 	Attempts int32
 	Replays  int32

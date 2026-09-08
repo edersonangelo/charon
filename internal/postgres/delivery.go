@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres/db"
 	"github.com/edersonangelo/charon/internal/provider"
@@ -24,10 +25,40 @@ var (
 // Creates the delivery rows a recorded event is owed, one per enabled route
 // for its provider. Runs after ingestion so that the inbound port never has to
 // know about routing.
+// Plan turns what arrived into deliveries, for every tenant.
+//
+// One tenant at a time, because the process that plans works for all of them
+// while row level security answers one at a time: a single sweep that names no
+// tenant is answered for one of them and finds nothing for the rest, quietly.
+// The batch is a budget spread across tenants rather than granted to each, so
+// the work one round does stays bounded however many there are.
 func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
+	tenants, err := s.Tenants(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	planned, left := 0, batch
+	for _, tenant := range tenants {
+		if left <= 0 {
+			break
+		}
+		count, taken, err := s.planFor(authz.WithTenant(ctx, tenant.ID), left)
+		if err != nil {
+			return planned, err
+		}
+		planned += count
+		left -= taken
+	}
+	return planned, nil
+}
+
+// planFor plans one tenant's arrivals and says how many events it looked at,
+// which is what the budget is spent on.
+func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("beginning the planning transaction: %w", err)
+		return 0, 0, fmt.Errorf("beginning the planning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -35,17 +66,16 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 
 	events, err := q.ClaimUnplannedEvents(ctx, int32(batch)) //nolint:gosec // batch is small
 	if err != nil {
-		return 0, fmt.Errorf("claiming unplanned events: %w", err)
+		return 0, 0, fmt.Errorf("claiming unplanned events: %w", err)
 	}
 
-	planned := 0
 	for _, event := range events {
 		// A signature that was checked and failed is settled here: recorded,
 		// visible, and never delivered anywhere.
 		if !event.Overridden &&
 			(event.Signature == string(provider.Invalid) || event.Signature == string(provider.Missing)) {
 			if markErr := q.MarkEventPlanned(ctx, event.ID); markErr != nil {
-				return 0, fmt.Errorf("settling event %s: %w", event.ID, markErr)
+				return 0, 0, fmt.Errorf("settling event %s: %w", event.ID, markErr)
 			}
 			continue
 		}
@@ -55,7 +85,7 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 				TenantID: event.TenantID, Provider: event.Provider,
 			})
 		if destErr != nil {
-			return 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)
+			return 0, 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)
 		}
 
 		// An event whose provider has no enabled route is left unplanned, so
@@ -71,25 +101,54 @@ func (s *Store) Plan(ctx context.Context, batch int) (int, error) {
 				EventID:       event.ID,
 				DestinationID: destinationID,
 			}); createErr != nil {
-				return 0, fmt.Errorf("creating a delivery for event %s: %w", event.ID, createErr)
+				return 0, 0, fmt.Errorf("creating a delivery for event %s: %w", event.ID, createErr)
 			}
 			planned++
 		}
 
 		if markErr := q.MarkEventPlanned(ctx, event.ID); markErr != nil {
-			return 0, fmt.Errorf("marking event %s planned: %w", event.ID, markErr)
+			return 0, 0, fmt.Errorf("marking event %s planned: %w", event.ID, markErr)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("committing the planned deliveries: %w", err)
+		return 0, 0, fmt.Errorf("committing the planned deliveries: %w", err)
 	}
-	return planned, nil
+	return planned, len(events), nil
 }
 
-// Takes a batch of due deliveries under a lease, so a worker that dies leaves
-// its rows to be picked up again once the lease expires.
-func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]outbound.Delivery, error) {
+// Claim takes a batch of due deliveries under a lease, so a worker that dies
+// leaves its rows to be picked up again once the lease expires.
+//
+// One tenant at a time, for the same reason planning is: this process works
+// for all of them and the database answers for one. The batch is spread across
+// them rather than granted to each.
+func (s *Store) Claim(
+	ctx context.Context, batch int, lease time.Duration,
+) ([]outbound.Delivery, error) {
+	tenants, err := s.Tenants(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	all := make([]outbound.Delivery, 0, batch)
+	for _, tenant := range tenants {
+		left := batch - len(all)
+		if left <= 0 {
+			break
+		}
+		taken, err := s.claimFor(authz.WithTenant(ctx, tenant.ID), tenant.ID, left, lease)
+		if err != nil {
+			return all, err
+		}
+		all = append(all, taken...)
+	}
+	return all, nil
+}
+
+func (s *Store) claimFor(
+	ctx context.Context, tenant uuid.UUID, batch int, lease time.Duration,
+) ([]outbound.Delivery, error) {
 	claimed, err := s.q.ClaimDeliveries(ctx, db.ClaimDeliveriesParams{
 		LeaseSeconds: lease.Seconds(),
 		BatchSize:    int32(batch), //nolint:gosec // batch is small
@@ -117,6 +176,7 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 
 		deliveries = append(deliveries, outbound.Delivery{
 			ID:        row.ID,
+			Tenant:    tenant,
 			EventID:   row.EventID,
 			Attempts:  row.Attempts,
 			Replays:   row.ReplayCount,
@@ -131,7 +191,8 @@ func (s *Store) Claim(ctx context.Context, batch int, lease time.Duration) ([]ou
 	return deliveries, nil
 }
 
-func (s *Store) MarkDelivered(ctx context.Context, id uuid.UUID, status int) error {
+func (s *Store) MarkDelivered(ctx context.Context, tenant, id uuid.UUID, status int) error {
+	ctx = authz.WithTenant(ctx, tenant)
 	if err := s.q.MarkDelivered(ctx, db.MarkDeliveredParams{
 		ID:         id,
 		LastStatus: pgtype.Int4{Int32: int32(status), Valid: true}, //nolint:gosec // http status
@@ -157,12 +218,13 @@ func (s *Store) PanelChanges(ctx context.Context) <-chan struct{} {
 
 func (s *Store) MarkFailed(
 	ctx context.Context,
-	id uuid.UUID,
+	tenant, id uuid.UUID,
 	nextAttempt time.Time,
 	status int,
 	reason string,
 	maxAttempts int,
 ) error {
+	ctx = authz.WithTenant(ctx, tenant)
 	lastStatus := pgtype.Int4{}
 	if status > 0 {
 		lastStatus = pgtype.Int4{Int32: int32(status), Valid: true} //nolint:gosec // http status
@@ -291,15 +353,31 @@ func (s *Store) OldestPendingSeconds(ctx context.Context) (float64, error) {
 
 // The earliest moment there is anything to do: an event still to plan, or a
 // delivery whose retry window has come. Reports false when the queue is idle.
+// NextWorkAt is the earliest moment any tenant has something due, so the loop
+// sleeps until then instead of polling. Asked one tenant at a time, because a
+// question that names none is answered for one of them, and sleeping on that
+// answer leaves every other tenant waiting out the safety interval.
 func (s *Store) NextWorkAt(ctx context.Context) (time.Time, bool, error) {
-	row, err := s.q.NextWorkAt(ctx)
+	tenants, err := s.Tenants(ctx)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("reading the next work time: %w", err)
+		return time.Time{}, false, err
 	}
-	if !row.Found {
-		return time.Time{}, false, nil
+
+	var earliest time.Time
+	found := false
+	for _, tenant := range tenants {
+		row, err := s.q.NextWorkAt(authz.WithTenant(ctx, tenant.ID))
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("reading the next work time: %w", err)
+		}
+		if !row.Found {
+			continue
+		}
+		if !found || row.At.Before(earliest) {
+			earliest, found = row.At, true
+		}
 	}
-	return row.At, true, nil
+	return earliest, found, nil
 }
 
 // Wake-ups announced by Record when it commits. The channel is closed when ctx

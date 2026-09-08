@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/postgres/db"
 )
@@ -271,9 +272,10 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 }
 
 func (s *Store) RecordAttempt(
-	ctx context.Context, deliveryID uuid.UUID, attempt, status int,
+	ctx context.Context, tenant, deliveryID uuid.UUID, attempt, status int,
 	signedWith []string, reason string, took time.Duration,
 ) error {
+	ctx = authz.WithTenant(ctx, tenant)
 	lastStatus := pgtype.Int4{}
 	if status > 0 {
 		lastStatus = pgtype.Int4{Int32: int32(status), Valid: true} //nolint:gosec // http status
