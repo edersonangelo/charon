@@ -280,8 +280,11 @@ handshake configured. A variable that is named but not set in the serving
 process answers `503` instead: the value is put there by a deploy and not by
 anything the serving process can do, so the provider is told to come back
 rather than told this address never confirmed anything. `verify list` names that
-case as `verify token from VAR (not set in this environment)`. The token and the
-signing secret are independent: a provider can have either, both or neither.
+case as `verify token from VAR (not set in this environment)`. A challenge
+longer than a kilobyte is refused with `400` rather than echoed, decided after
+the token so that nobody learns from it whether an address confirms one. The
+token and the signing secret are independent: a provider can have either, both
+or neither.
 
 Saving a provider rewrites its whole row, so a re-run that does not name the
 variable keeps the one already stored: rotating a secret cannot switch a

@@ -42,6 +42,11 @@ const (
 	verifyTokenParam = "hub.verify_token"
 )
 
+// A ceiling, not a defence: the url bounds this already, and Meta's challenge
+// is ten digits. A value a hundred times longer is not a challenge, and
+// echoing it would be answering something else.
+const maxChallengeBytes = 1024
+
 type Config struct {
 	Tokens Tokens
 	Logger *slog.Logger
@@ -129,6 +134,19 @@ func (h *Handler) Answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// After the token and not before it: a 400 handed to a caller who proved
+	// nothing is an answer they could tell apart from 405, which would let a
+	// stranger learn that this address confirms one. The comparison above is
+	// over a different parameter and costs nothing more for an oversized one.
+	challenge := query.Get(challengeParam)
+	if len(challenge) > maxChallengeBytes {
+		// The length only. The value is not a credential, but it is not ours.
+		h.logger.WarnContext(ctx, "a handshake offered a challenge too long to echo",
+			"tenant", slug, "provider", name, "bytes", len(challenge))
+		http.Error(w, "the challenge is too long to echo", http.StatusBadRequest)
+		return
+	}
+
 	h.logger.InfoContext(ctx, "confirmed a webhook address", "tenant", slug, "provider", name)
 
 	// The body is the challenge and nothing else: the provider compares it
@@ -140,7 +158,7 @@ func (h *Handler) Answer(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	//nolint:gosec // G705: the echo is the contract, and text/plain with nosniff is the mitigation
-	if _, err := w.Write([]byte(query.Get(challengeParam))); err != nil {
+	if _, err := w.Write([]byte(challenge)); err != nil {
 		h.logger.WarnContext(ctx, "could not write the handshake answer",
 			"tenant", slug, "provider", name, "error", err)
 	}

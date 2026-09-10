@@ -236,6 +236,54 @@ func TestAnAbsentChallengeIsEchoedAsNothing(t *testing.T) {
 	}
 }
 
+func TestAChallengeTooLongToEchoIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		bytes int
+		want  int
+	}{
+		{"at the ceiling", 1024, http.StatusOK},
+		{"over the ceiling", 1025, http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			long := strings.Repeat("9", tt.bytes)
+			rec := get(t, serve(t, configured()),
+				"/webhooks/whatsapp?hub.challenge="+long+"&hub.verify_token="+token)
+
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.want == http.StatusOK && rec.Body.String() != long {
+				t.Errorf("body is %d bytes, want the challenge's %d",
+					rec.Body.Len(), len(long))
+			}
+			if tt.want != http.StatusOK && strings.Contains(rec.Body.String(), long) {
+				t.Error("the refusal echoed the challenge it refused")
+			}
+		})
+	}
+}
+
+// The ceiling is checked after the token, so an oversized challenge cannot be
+// used to tell a configured address apart from one that serves only POST.
+func TestAnUnknownCallerIsNotToldItsChallengeIsTooLong(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("9", 1025)
+	rec := get(t, serve(t, configured()),
+		"/webhooks/whatsapp?hub.challenge="+long+"&hub.verify_token=not-the-token")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
 // A database that cannot answer is not a refusal: answering 403 would tell a
 // provider its token is wrong when nothing was ever compared.
 func TestADatabaseThatCannotAnswerIsNotARefusal(t *testing.T) {
