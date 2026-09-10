@@ -240,17 +240,19 @@ type UnroutedProvider struct {
 }
 
 // Verification is a provider's signature settings as the panel shows them.
-// The secret never appears here: only the name of the variable that holds it.
+// No secret ever appears here: only the names of the variables that hold them.
 type Verification struct {
-	Provider      string
-	Verifier      string
-	Scheme        string
-	Algorithm     string
-	Encoding      string
-	Header        string
-	SecretEnv     string
-	SecretPresent bool
-	Refused       int64
+	Provider           string
+	Verifier           string
+	Scheme             string
+	Algorithm          string
+	Encoding           string
+	Header             string
+	SecretEnv          string
+	SecretPresent      bool
+	VerifyTokenEnv     string
+	VerifyTokenPresent bool
+	Refused            int64
 }
 
 var ErrWrongPassword = errors.New("wrong email or password")

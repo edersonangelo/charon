@@ -225,6 +225,8 @@ signature does not match is still recorded and marked, and never delivered.
 ```sh
 export CHARON_SECRET_STRIPE='whsec_...'   # or a line in .env, under compose
 charon verify set -provider stripe -preset stripe -secret-env CHARON_SECRET_STRIPE
+charon verify set -provider whatsapp-bussines -preset whatsapp-bussines \
+  -secret-env CHARON_SECRET_WHATSAPP -verify-token-env CHARON_VERIFY_WHATSAPP
 charon verify presets
 charon verify list
 charon verify recheck -provider stripe
@@ -235,7 +237,9 @@ charon verify remove -provider stripe
 |---|---|
 | `-provider` | whose requests are checked |
 | `-secret-env` | **name** of the environment variable holding the secret |
-| `-preset` | `stripe`, `github`, `shopify`, `bearer-token`, `basic-auth` |
+| `-verify-token-env` | **name** of the environment variable holding the token a provider offers when it confirms the address, for one that will not accept an address until it answers |
+| `-clear-verify-token` | stop confirming the address, forgetting the variable the token was read from |
+| `-preset` | `stripe`, `charon`, `github`, `shopify`, `whatsapp-bussines`, `instagram`, `bearer-token`, `basic-auth` |
 | `-verifier` | `hmac`, `shared-token`, `basic-auth` |
 | `-scheme` | `simple`, `advanced` |
 | `-algorithm` | `sha1`, `sha256`, `sha512` |
@@ -267,6 +271,26 @@ charon verify recheck -provider stripe
 Neither touches a request that was already delivered. It keeps the answer it
 went out with, because saying now that it was never signed would claim it had
 been held back, and it was not.
+
+Some providers confirm the address before sending anything: they `GET` it with
+a token they were told and a value to echo. `-verify-token-env` names the
+variable holding that token, and `GET /webhooks/{provider}` then answers `200`
+with the echoed value, `403` to a wrong token, and `405` for a provider with no
+handshake configured. A variable that is named but not set in the serving
+process answers `503` instead: the value is put there by a deploy and not by
+anything the serving process can do, so the provider is told to come back
+rather than told this address never confirmed anything. `verify list` names that
+case as `verify token from VAR (not set in this environment)`. A challenge
+longer than a kilobyte is refused with `400` rather than echoed, decided after
+the token so that nobody learns from it whether an address confirms one. The
+token and the signing secret are independent: a provider can have either, both
+or neither.
+
+Saving a provider rewrites its whole row, so a re-run that does not name the
+variable keeps the one already stored: rotating a secret cannot switch a
+handshake off by omission. Switching one off is `-clear-verify-token`, which
+says on stderr what stopped confirming. Naming a variable and clearing one in
+the same command is refused, because they are opposite instructions.
 
 ## sign
 

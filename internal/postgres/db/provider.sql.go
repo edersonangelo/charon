@@ -94,7 +94,7 @@ func (q *Queries) NotifyProviders(ctx context.Context) error {
 
 const providers = `-- name: Providers :many
 select name, verifier, secret_env, signature_header, tolerance_seconds,
-       scheme, algorithm, encoding, timestamp_key, signature_key
+       scheme, algorithm, encoding, timestamp_key, signature_key, verify_token_env
 from provider where tenant_id = $1 order by name
 `
 
@@ -109,6 +109,7 @@ type ProvidersRow struct {
 	Encoding         string
 	TimestampKey     string
 	SignatureKey     string
+	VerifyTokenEnv   string
 }
 
 func (q *Queries) Providers(ctx context.Context, tenantID uuid.UUID) ([]ProvidersRow, error) {
@@ -131,6 +132,7 @@ func (q *Queries) Providers(ctx context.Context, tenantID uuid.UUID) ([]Provider
 			&i.Encoding,
 			&i.TimestampKey,
 			&i.SignatureKey,
+			&i.VerifyTokenEnv,
 		); err != nil {
 			return nil, err
 		}
@@ -177,9 +179,9 @@ func (q *Queries) RefusedByProvider(ctx context.Context, tenantID uuid.UUID) ([]
 const setProvider = `-- name: SetProvider :exec
 insert into provider (
     tenant_id, name, verifier, secret_env, signature_header, tolerance_seconds,
-    scheme, algorithm, encoding, timestamp_key, signature_key
+    scheme, algorithm, encoding, timestamp_key, signature_key, verify_token_env
 ) values (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
 on conflict (tenant_id, name) do update
 set verifier = excluded.verifier,
@@ -190,7 +192,8 @@ set verifier = excluded.verifier,
     algorithm = excluded.algorithm,
     encoding = excluded.encoding,
     timestamp_key = excluded.timestamp_key,
-    signature_key = excluded.signature_key
+    signature_key = excluded.signature_key,
+    verify_token_env = excluded.verify_token_env
 `
 
 type SetProviderParams struct {
@@ -205,6 +208,7 @@ type SetProviderParams struct {
 	Encoding         string
 	TimestampKey     string
 	SignatureKey     string
+	VerifyTokenEnv   string
 }
 
 func (q *Queries) SetProvider(ctx context.Context, arg SetProviderParams) error {
@@ -220,6 +224,7 @@ func (q *Queries) SetProvider(ctx context.Context, arg SetProviderParams) error 
 		arg.Encoding,
 		arg.TimestampKey,
 		arg.SignatureKey,
+		arg.VerifyTokenEnv,
 	)
 	return err
 }

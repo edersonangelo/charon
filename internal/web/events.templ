@@ -403,7 +403,7 @@ templ signatureNote(state string) {
 	}
 }
 
-templ verificationPage(items []console.Verification, providers []string) {
+templ verificationPage(items []console.Verification, providers []string, editing *console.Verification) {
 	<div id="verification">
 		@settingsNav("/verification")
 		<h1>Verification</h1>
@@ -413,15 +413,20 @@ templ verificationPage(items []console.Verification, providers []string) {
 			marked, and never delivered anywhere.
 		</p>
 		<p class="muted">
-			The secret is never stored: a row names the environment variable that carries it, so
-			a database dump cannot be used to forge a signature.
+			No secret is ever stored: a row names the environment variables that carry them, so a
+			database dump cannot be used to forge a signature or to claim an address.
+		</p>
+		<p class="muted">
+			A provider that will not accept an address until the address answers for itself gets
+			the name of a second variable. Charon then echoes the value such a provider asks it to
+			echo, and refuses anyone offering a different token.
 		</p>
 		if len(items) == 0 {
 			<p class="muted">No provider is verified.</p>
 		} else {
 			<table>
 				<thead>
-					<tr><th>provider</th><th>proof</th><th>header</th><th>secret from</th><th>refused</th><th></th></tr>
+					<tr><th>provider</th><th>proof</th><th>header</th><th>secrets from</th><th>refused</th><th></th></tr>
 				</thead>
 				<tbody>
 					for _, item := range items {
@@ -440,6 +445,14 @@ templ verificationPage(items []console.Verification, providers []string) {
 								if !item.SecretPresent {
 									<span class="pill dead">not set here</span>
 								}
+								if item.VerifyTokenEnv != "" {
+									<div class="muted">
+										verify token { item.VerifyTokenEnv }
+										if !item.VerifyTokenPresent {
+											<span class="pill dead">not set here</span>
+										}
+									</div>
+								}
 							</td>
 							<td>
 								if item.Refused > 0 {
@@ -455,6 +468,8 @@ templ verificationPage(items []console.Verification, providers []string) {
 										if item.Refused > 0 {
 											<button hx-confirm="Check the refused requests again with the current secret?">recheck</button>
 										}
+										<button type="button" hx-get={ "/verification?edit=" + item.Provider }
+												hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">edit</button>
 										<button hx-post={ "/verification/" + item.Provider + "/remove" }
 												hx-target="#verification" hx-select="#verification" hx-swap="outerHTML"
 												hx-confirm="Stop checking this provider? Its requests will be accepted unchecked.">remove</button>
@@ -470,19 +485,46 @@ templ verificationPage(items []console.Verification, providers []string) {
 			<section>
 				<h2>Verify a provider</h2>
 				<form class="filters" hx-post="/verification" hx-target="#verification" hx-select="#verification" hx-swap="outerHTML">
-					<input type="text" name="provider" placeholder="provider" list="seen-providers" required/>
+					<input type="text" name="provider" placeholder="provider" list="seen-providers"
+							if editing != nil {
+								value={ editing.Provider }
+							}
+							required/>
 					<datalist id="seen-providers">
 						for _, name := range providers {
 							<option value={ name }></option>
 						}
 					</datalist>
 					<select name="preset">
+						if editing != nil {
+							if editing.VerifyTokenEnv != "" {
+								<option value="" data-confirms="" selected>keep the current parameters</option>
+							} else {
+								<option value="" selected>keep the current parameters</option>
+							}
+						}
 						for _, preset := range provider.Presets() {
-							<option value={ preset.Name } title={ preset.Description }>{ preset.Name }</option>
+							if preset.ConfirmsAddress {
+								<option value={ preset.Name } title={ preset.Description } data-confirms="">{ preset.Name }</option>
+							} else {
+								<option value={ preset.Name } title={ preset.Description }>{ preset.Name }</option>
+							}
 						}
 					</select>
-					<input type="text" name="secret-env" placeholder="CHARON_SECRET_STRIPE" size="26" required/>
-					<input type="text" name="header" placeholder="header, to override the preset" size="26"/>
+					<input type="text" name="secret-env" placeholder="CHARON_SECRET_STRIPE" size="26"
+							if editing != nil {
+								value={ editing.SecretEnv }
+							}
+							required/>
+					<input type="text" name="header" placeholder="header, to override the preset" size="26"
+							if editing != nil {
+								value={ editing.Header }
+							}/>
+					<input type="text" name="verify-token-env" class="confirms-address"
+							placeholder="variable holding the verify token" size="26"
+							if editing != nil {
+								value={ editing.VerifyTokenEnv }
+							}/>
 					<button>verify</button>
 				</form>
 			</section>

@@ -27,15 +27,17 @@ func (s *Store) Verification(ctx context.Context) (map[string]provider.Settings,
 	settings := make(map[string]provider.Settings, len(rows))
 	for _, row := range rows {
 		settings[row.Name] = provider.Settings{
-			Verifier:     row.Verifier,
-			Secret:       os.Getenv(row.SecretEnv),
-			Header:       row.SignatureHeader.String,
-			Scheme:       row.Scheme,
-			Algorithm:    row.Algorithm,
-			Encoding:     row.Encoding,
-			TimestampKey: row.TimestampKey,
-			SignatureKey: row.SignatureKey,
-			Tolerance:    time.Duration(row.ToleranceSeconds) * time.Second,
+			Verifier:         row.Verifier,
+			Secret:           os.Getenv(row.SecretEnv),
+			VerifyToken:      os.Getenv(row.VerifyTokenEnv),
+			VerifyTokenNamed: row.VerifyTokenEnv != "",
+			Header:           row.SignatureHeader.String,
+			Scheme:           row.Scheme,
+			Algorithm:        row.Algorithm,
+			Encoding:         row.Encoding,
+			TimestampKey:     row.TimestampKey,
+			SignatureKey:     row.SignatureKey,
+			Tolerance:        time.Duration(row.ToleranceSeconds) * time.Second,
 		}
 	}
 	return settings, nil
@@ -69,9 +71,11 @@ func (s *Store) AllVerification(
 // ProviderSettings is the configuration as stored, without secrets, for the
 // panel and the command line to show.
 type ProviderSettings struct {
-	Name          string
-	SecretEnv     string
-	SecretPresent bool
+	Name               string
+	SecretEnv          string
+	SecretPresent      bool
+	VerifyTokenEnv     string
+	VerifyTokenPresent bool
 	provider.Settings
 }
 
@@ -84,10 +88,16 @@ func (s *Store) ProviderSettings(ctx context.Context) ([]ProviderSettings, error
 	settings := make([]ProviderSettings, 0, len(rows))
 	for _, row := range rows {
 		_, present := os.LookupEnv(row.SecretEnv)
+		tokenPresent := false
+		if row.VerifyTokenEnv != "" {
+			_, tokenPresent = os.LookupEnv(row.VerifyTokenEnv)
+		}
 		settings = append(settings, ProviderSettings{
-			Name:          row.Name,
-			SecretEnv:     row.SecretEnv,
-			SecretPresent: present,
+			Name:               row.Name,
+			SecretEnv:          row.SecretEnv,
+			SecretPresent:      present,
+			VerifyTokenEnv:     row.VerifyTokenEnv,
+			VerifyTokenPresent: tokenPresent,
 			Settings: provider.Settings{
 				Verifier:     row.Verifier,
 				Header:       row.SignatureHeader.String,
@@ -124,15 +134,17 @@ func (s *Store) Verifications(ctx context.Context) ([]console.Verification, erro
 	out := make([]console.Verification, 0, len(settings))
 	for _, item := range settings {
 		out = append(out, console.Verification{
-			Provider:      item.Name,
-			Verifier:      item.Verifier,
-			Scheme:        item.Scheme,
-			Algorithm:     item.Algorithm,
-			Encoding:      item.Encoding,
-			Header:        item.Header,
-			SecretEnv:     item.SecretEnv,
-			SecretPresent: item.SecretPresent,
-			Refused:       refused[item.Name],
+			Provider:           item.Name,
+			Verifier:           item.Verifier,
+			Scheme:             item.Scheme,
+			Algorithm:          item.Algorithm,
+			Encoding:           item.Encoding,
+			Header:             item.Header,
+			SecretEnv:          item.SecretEnv,
+			SecretPresent:      item.SecretPresent,
+			VerifyTokenEnv:     item.VerifyTokenEnv,
+			VerifyTokenPresent: item.VerifyTokenPresent,
+			Refused:            refused[item.Name],
 		})
 	}
 	return out, nil
@@ -164,6 +176,7 @@ func (s *Store) SetProvider(ctx context.Context, settings ProviderSettings) erro
 		Encoding:         orDefault(settings.Encoding, provider.Hex),
 		TimestampKey:     orDefault(settings.TimestampKey, "t"),
 		SignatureKey:     orDefault(settings.SignatureKey, "v1"),
+		VerifyTokenEnv:   settings.VerifyTokenEnv,
 	}); err != nil {
 		return fmt.Errorf("saving provider %q: %w", settings.Name, err)
 	}

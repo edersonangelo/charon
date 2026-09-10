@@ -134,6 +134,7 @@ type Provider struct {
 	TimestampKey     string
 	SignatureKey     string
 	TenantID         uuid.UUID
+	VerifyTokenEnv   string
 }
 
 type Role struct {

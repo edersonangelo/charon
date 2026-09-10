@@ -85,6 +85,7 @@ type Store interface {
 	DeleteRoute(ctx context.Context, routeID uuid.UUID) error
 	ReplayDestination(ctx context.Context, routeID uuid.UUID) (int64, error)
 	Verifications(ctx context.Context) ([]console.Verification, error)
+	ProviderSettings(ctx context.Context) ([]postgres.ProviderSettings, error)
 	SetProvider(ctx context.Context, settings postgres.ProviderSettings) error
 	DeleteProvider(ctx context.Context, name string) error
 	Recheck(ctx context.Context, name string, batch int32) (int, error)
@@ -770,7 +771,21 @@ func (h *Handler) verification(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.page(w, r, "Verification", verificationPage(items, providers))
+
+	// Saving a provider rewrites every column of its row, so editing one has
+	// to start from what is stored: a field left blank because the form never
+	// showed it would silently clear it.
+	var editing *console.Verification
+	if wanted := r.URL.Query().Get("edit"); wanted != "" {
+		for i, item := range items {
+			if item.Provider == wanted {
+				editing = &items[i]
+				break
+			}
+		}
+	}
+
+	h.page(w, r, "Verification", verificationPage(items, providers, editing))
 }
 
 func (h *Handler) setVerification(w http.ResponseWriter, r *http.Request) {
@@ -782,32 +797,71 @@ func (h *Handler) setVerification(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostForm.Get("provider"))
 	secretEnv := strings.TrimSpace(r.PostForm.Get("secret-env"))
 	presetName := strings.TrimSpace(r.PostForm.Get("preset"))
+	verifyTokenEnv := strings.TrimSpace(r.PostForm.Get("verify-token-env"))
 
-	preset, found := provider.PresetByName(presetName)
-	if name == "" || secretEnv == "" || !found {
-		http.Error(w, "a provider, a preset and the name of a secret variable are required",
+	if name == "" || secretEnv == "" {
+		http.Error(w, "a provider and the name of a secret variable are required",
 			http.StatusBadRequest)
 		return
 	}
 
-	settings := preset.Settings
+	// No preset means keep the parameters this provider already has, which is
+	// the only way to change one field of an existing row without choosing its
+	// verification again. A provider that has none has nothing to keep.
+	settings, err := h.chosenParameters(r.Context(), name, presetName)
+	if errors.Is(err, errNoParameters) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
 	if header := strings.TrimSpace(r.PostForm.Get("header")); header != "" {
 		settings.Header = header
 	}
 
 	if err := h.store.SetProvider(r.Context(), postgres.ProviderSettings{
-		Name:      name,
-		SecretEnv: secretEnv,
-		Settings:  settings,
+		Name:           name,
+		SecretEnv:      secretEnv,
+		VerifyTokenEnv: verifyTokenEnv,
+		Settings:       settings,
 	}); err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	h.logger.InfoContext(r.Context(), "configured verification",
 		"provider", name, "preset", presetName, "verifier", settings.Verifier,
-		"secret_env", secretEnv, "by", currentUser(r).Email)
+		"secret_env", secretEnv, "verify_token_env", verifyTokenEnv,
+		"by", currentUser(r).Email)
 
 	h.verification(w, r)
+}
+
+var errNoParameters = errors.New(
+	"a preset is required for a provider that is not verified yet")
+
+func (h *Handler) chosenParameters(
+	ctx context.Context, name, presetName string,
+) (provider.Settings, error) {
+	if presetName != "" {
+		preset, found := provider.PresetByName(presetName)
+		if !found {
+			return provider.Settings{}, errNoParameters
+		}
+		return preset.Settings, nil
+	}
+
+	stored, err := h.store.ProviderSettings(ctx)
+	if err != nil {
+		return provider.Settings{}, err
+	}
+	for _, item := range stored {
+		if item.Name == name {
+			return item.Settings, nil
+		}
+	}
+	return provider.Settings{}, errNoParameters
 }
 
 func (h *Handler) removeVerification(w http.ResponseWriter, r *http.Request) {

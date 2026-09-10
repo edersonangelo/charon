@@ -16,6 +16,7 @@ import (
 
 	"github.com/edersonangelo/charon/internal/auth"
 	"github.com/edersonangelo/charon/internal/delivery"
+	"github.com/edersonangelo/charon/internal/handshake"
 	"github.com/edersonangelo/charon/internal/health"
 	"github.com/edersonangelo/charon/internal/ingest"
 	"github.com/edersonangelo/charon/internal/metrics"
@@ -88,6 +89,10 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		MaxBodyBytes: cfg.maxBodyBytes,
 		Verification: verification,
 		Logger:       logger,
+	}).Register(mux)
+	handshake.New(store, handshake.Config{
+		Tokens: verification,
+		Logger: logger,
 	}).Register(mux)
 	health.New(store).Register(mux)
 	web.New(store, web.Config{
