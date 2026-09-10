@@ -364,6 +364,11 @@ func TestEveryPresetIsOnlyParameters(t *testing.T) {
 				t.Fatalf("preset %q carries a credential; a preset is parameters, "+
 					"and a credential belongs in the environment", preset.Name)
 			}
+			if preset.Settings.VerifyTokenNamed {
+				t.Fatalf("preset %q claims a variable was named for it; "+
+					"that is a fact about one deployment's row, not a parameter",
+					preset.Name)
+			}
 
 			settings := preset.Settings
 			settings.Secret = secret

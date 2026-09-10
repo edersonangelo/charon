@@ -27,7 +27,10 @@ type (
 	}
 
 	Tokens interface {
-		VerifyToken(tenant uuid.UUID, provider string) string
+		// VerifyToken is the token a provider must offer, and whether one was
+		// ever asked for. A provider that asked and whose token cannot be read
+		// here answers ("", true).
+		VerifyToken(tenant uuid.UUID, provider string) (token string, configured bool)
 	}
 )
 
@@ -91,15 +94,29 @@ func (h *Handler) Answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Not redundant with the comparison below: ConstantTimeCompare of two
-	// empty slices holds, so an unconfigured provider would confirm its
-	// address to a request that offered no token at all.
-	expected := h.tokens.VerifyToken(tenant, name)
-	if expected == "" {
+	// Both empty cases are refused ahead of the comparison below, because
+	// ConstantTimeCompare of two empty slices holds: without this, a provider
+	// with no token would confirm its address to a request offering none.
+	expected, configured := h.tokens.VerifyToken(tenant, name)
+	if !configured {
 		h.logger.DebugContext(ctx, "a handshake arrived for a provider that confirms nothing",
 			"tenant", slug, "provider", name)
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "only POST is served for this provider", http.StatusMethodNotAllowed)
+		return
+	}
+	// A token that was asked for and cannot be read here is a deploy that has
+	// not landed, so it is ours and not the caller's: 405 would say this
+	// address never confirmed anything, and it did. The inbound port answers
+	// the same misconfiguration by recording the request as invalid, which is
+	// open to it because a POST carries a payload that has to be kept
+	// whatever we conclude. A handshake carries nothing to keep, so the status
+	// is the whole answer and has to carry the difference itself.
+	if expected == "" {
+		h.logger.ErrorContext(ctx,
+			"a handshake arrived for a provider whose verify token is not set in this process",
+			"tenant", slug, "provider", name)
+		http.Error(w, "the verify token is not readable here", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -133,4 +150,4 @@ func (h *Handler) Answer(w http.ResponseWriter, r *http.Request) {
 // path rather than a nil test on every request.
 type nothingConfigured struct{}
 
-func (nothingConfigured) VerifyToken(uuid.UUID, string) string { return "" }
+func (nothingConfigured) VerifyToken(uuid.UUID, string) (string, bool) { return "", false }

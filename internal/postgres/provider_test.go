@@ -38,6 +38,9 @@ func TestAVerifyTokenIsResolvedFromTheEnvironment(t *testing.T) {
 	if got := resolved["whatsapp"].VerifyToken; got != "meta-token" {
 		t.Errorf("token = %q, want %q", got, "meta-token")
 	}
+	if !resolved["whatsapp"].VerifyTokenNamed {
+		t.Error("a variable was named for the token and the settings do not say so")
+	}
 
 	shown, err := store.ProviderSettings(ctx)
 	if err != nil {
@@ -95,6 +98,35 @@ func TestAVerifyTokenIsClearedWhenItIsSavedAway(t *testing.T) {
 	}
 	if shown[0].VerifyTokenPresent {
 		t.Error("a provider with no variable named was reported as having one set")
+	}
+}
+
+// A variable that is named and not set here resolves to nothing, and the row
+// still has to say one was asked for: it is the difference between a deploy
+// that has not landed and an address that confirms nothing.
+func TestAVerifyTokenNamedButNotSetHereIsStillNamed(t *testing.T) {
+	store, _ := open(t)
+	ctx := context.Background()
+
+	preset, _ := provider.PresetByName("whatsapp-bussines")
+	if err := store.SetProvider(ctx, postgres.ProviderSettings{
+		Name:           "whatsapp",
+		SecretEnv:      "CHARON_TEST_SECRET",
+		VerifyTokenEnv: "CHARON_TEST_VERIFY_TOKEN_NOBODY_SET",
+		Settings:       preset.Settings,
+	}); err != nil {
+		t.Fatalf("configuring verification: %v", err)
+	}
+
+	resolved, err := store.Verification(ctx)
+	if err != nil {
+		t.Fatalf("reading verification settings: %v", err)
+	}
+	if got := resolved["whatsapp"].VerifyToken; got != "" {
+		t.Errorf("token = %q, want it unresolved", got)
+	}
+	if !resolved["whatsapp"].VerifyTokenNamed {
+		t.Error("the row named a variable and the settings do not say so")
 	}
 }
 

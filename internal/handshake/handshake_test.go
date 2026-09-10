@@ -36,10 +36,14 @@ func (f fakeTenants) Tenant(_ context.Context, slug string) (uuid.UUID, bool, er
 }
 
 // tokens is the port the handler needs: a token per tenant and provider, and
-// nothing for anybody absent.
+// nothing for anybody absent. A provider present with an empty token is one
+// that named a variable this process cannot read.
 type tokens map[uuid.UUID]map[string]string
 
-func (t tokens) VerifyToken(tenant uuid.UUID, name string) string { return t[tenant][name] }
+func (t tokens) VerifyToken(tenant uuid.UUID, name string) (string, bool) {
+	token, configured := t[tenant][name]
+	return token, configured
+}
 
 func serve(t *testing.T, cfg handshake.Config) *http.ServeMux {
 	t.Helper()
@@ -118,18 +122,43 @@ func TestAWrongTokenIsRefused(t *testing.T) {
 	}
 }
 
-// ConstantTimeCompare of two empty slices holds, so a provider configured with
-// a variable that is not set here must not confirm its address to a request
-// that offered nothing.
+// A token that was asked for and cannot be read here is a deploy that has not
+// landed. Answering 405 would say this address never confirmed anything, and a
+// provider that gives up on it stops trying; 503 is true and it will retry.
+func TestATokenThatCannotBeReadHereIsNotARefusal(t *testing.T) {
+	t.Parallel()
+
+	cfg := handshake.Config{Tokens: tokens{firstTenant: {"whatsapp": ""}}}
+	rec := get(t, serve(t, cfg),
+		"/webhooks/whatsapp?hub.challenge="+challenge+"&hub.verify_token="+token)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (body %q)",
+			rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, challenge) {
+		t.Errorf("body %q echoed the challenge with no token to compare", body)
+	}
+	if got := rec.Header().Get("Allow"); got != "" {
+		t.Errorf("allow = %q, want it unset: the method is not the complaint", got)
+	}
+}
+
+// ConstantTimeCompare of two empty slices holds, so a provider whose token
+// cannot be read here must not confirm its address to a request that offered
+// nothing either.
 func TestAnEmptyTokenNeverMatches(t *testing.T) {
 	t.Parallel()
 
 	cfg := handshake.Config{Tokens: tokens{firstTenant: {"whatsapp": ""}}}
 	rec := get(t, serve(t, cfg), "/webhooks/whatsapp?hub.challenge="+challenge)
 
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d (body %q)",
-			rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status = %d, want anything but %d (body %q)",
+			rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, challenge) {
+		t.Errorf("body %q echoed the challenge to a caller that proved nothing", body)
 	}
 }
 

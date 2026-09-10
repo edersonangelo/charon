@@ -277,8 +277,10 @@ a token they were told and a value to echo. `-verify-token-env` names the
 variable holding that token, and `GET /webhooks/{provider}` then answers `200`
 with the echoed value, `403` to a wrong token, and `405` for a provider with no
 handshake configured. A variable that is named but not set in the serving
-process comes to the same `405`, which is what `verify list` reports as
-`verify token from VAR (not set in this environment)`. The token and the
+process answers `503` instead: the value is put there by a deploy and not by
+anything the serving process can do, so the provider is told to come back
+rather than told this address never confirmed anything. `verify list` names that
+case as `verify token from VAR (not set in this environment)`. The token and the
 signing secret are independent: a provider can have either, both or neither.
 
 Saving a provider rewrites its whole row, so a re-run that does not name the

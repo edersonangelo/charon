@@ -28,8 +28,16 @@ type Cache struct {
 
 	mu       sync.RWMutex
 	built    map[uuid.UUID]map[string]Verifier
-	tokens   map[uuid.UUID]map[string]string
+	tokens   map[uuid.UUID]map[string]handshakeToken
 	fallback Verifier
+}
+
+// handshakeToken carries what a resolved value cannot say on its own: that a
+// variable was named for it. A value implies one was, since nothing resolved a
+// token nobody named.
+type handshakeToken struct {
+	value string
+	named bool
 }
 
 func NewCache(source Source, registry *Registry, refresh time.Duration, logger *slog.Logger) *Cache {
@@ -48,7 +56,7 @@ func NewCache(source Source, registry *Registry, refresh time.Duration, logger *
 		logger:   logger,
 		refresh:  refresh,
 		built:    map[uuid.UUID]map[string]Verifier{},
-		tokens:   map[uuid.UUID]map[string]string{},
+		tokens:   map[uuid.UUID]map[string]handshakeToken{},
 		fallback: Unverified{},
 	}
 }
@@ -64,14 +72,16 @@ func (c *Cache) Verifier(tenant uuid.UUID, name string) Verifier {
 }
 
 // VerifyToken is the token a provider must offer before its callback address
-// is confirmed. Empty means there is nothing to confirm: either no provider
-// asked for it, or the variable it was told to read is not set here. Nothing
-// can be compared against nothing, so the two are the same answer.
-func (c *Cache) VerifyToken(tenant uuid.UUID, name string) string {
+// is confirmed, and whether one was ever asked for. A provider that asked and
+// whose variable is not set here answers ("", true): nothing can be compared,
+// and nothing in this process can put it there either, which is a different
+// answer from an address that confirms nothing.
+func (c *Cache) VerifyToken(tenant uuid.UUID, name string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.tokens[tenant][name]
+	token := c.tokens[tenant][name]
+	return token.value, token.named
 }
 
 // Watch loads the settings and keeps them current: at once when a change is
@@ -109,15 +119,15 @@ func (c *Cache) load(ctx context.Context) {
 	}
 
 	built := make(map[uuid.UUID]map[string]Verifier, len(byTenant))
-	tokens := make(map[uuid.UUID]map[string]string, len(byTenant))
+	tokens := make(map[uuid.UUID]map[string]handshakeToken, len(byTenant))
 	for tenant, settings := range byTenant {
 		verifiers := make(map[string]Verifier, len(settings))
 		for name, item := range settings {
-			if item.VerifyToken != "" {
+			if item.VerifyTokenNamed || item.VerifyToken != "" {
 				if tokens[tenant] == nil {
-					tokens[tenant] = map[string]string{}
+					tokens[tenant] = map[string]handshakeToken{}
 				}
-				tokens[tenant][name] = item.VerifyToken
+				tokens[tenant][name] = handshakeToken{value: item.VerifyToken, named: true}
 			}
 
 			verifier, err := c.registry.Verifier(item)

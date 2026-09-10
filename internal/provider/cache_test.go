@@ -54,6 +54,12 @@ func TestTheCacheHandsOverTheVerifyToken(t *testing.T) {
 				VerifyToken: "meta-token",
 			},
 			"stripe": {Verifier: provider.HMAC, Secret: secret, Header: "Stripe-Signature"},
+			// A row that named a variable the process cannot read: the token
+			// resolved to nothing, but it was asked for.
+			"instagram": {
+				Verifier: provider.HMAC, Secret: secret,
+				Header: "X-Hub-Signature-256", VerifyTokenNamed: true,
+			},
 		},
 		anotherTenant: {
 			"whatsapp": {Verifier: provider.HMAC, Secret: secret, VerifyToken: "another-token"},
@@ -61,24 +67,33 @@ func TestTheCacheHandsOverTheVerifyToken(t *testing.T) {
 	}})
 
 	tests := []struct {
-		name   string
-		tenant uuid.UUID
-		what   string
-		want   string
+		name           string
+		tenant         uuid.UUID
+		what           string
+		want           string
+		wantConfigured bool
 	}{
-		{"a provider that confirms its address", oneTenant, "whatsapp", "meta-token"},
-		{"the same provider under another tenant", anotherTenant, "whatsapp", "another-token"},
-		{"a provider that confirms nothing", oneTenant, "stripe", ""},
-		{"a provider nobody configured", oneTenant, "shopify", ""},
-		{"a tenant nobody configured", uuid.Nil, "whatsapp", ""},
+		{"a provider that confirms its address", oneTenant, "whatsapp", "meta-token", true},
+		{"the same provider under another tenant", anotherTenant, "whatsapp", "another-token", true},
+		// Named and unreadable is not the same as never asked for: the first
+		// is a deploy that has not landed, and the handshake owes them
+		// different answers.
+		{"a provider whose token cannot be read here", oneTenant, "instagram", "", true},
+		{"a provider that confirms nothing", oneTenant, "stripe", "", false},
+		{"a provider nobody configured", oneTenant, "shopify", "", false},
+		{"a tenant nobody configured", uuid.Nil, "whatsapp", "", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := cache.VerifyToken(tt.tenant, tt.what); got != tt.want {
+			got, configured := cache.VerifyToken(tt.tenant, tt.what)
+			if got != tt.want {
 				t.Errorf("token = %q, want %q", got, tt.want)
+			}
+			if configured != tt.wantConfigured {
+				t.Errorf("configured = %t, want %t", configured, tt.wantConfigured)
 			}
 		})
 	}

@@ -34,14 +34,20 @@ type Settings struct {
 	// VerifyToken is what a provider that confirms its callback address before
 	// sending anything offers when it does. Resolved, like Secret, so a preset
 	// must never set either: a preset is parameters, and these are credentials.
-	VerifyToken  string
-	Header       string
-	Scheme       string
-	Algorithm    string
-	Encoding     string
-	TimestampKey string
-	SignatureKey string
-	Tolerance    time.Duration
+	VerifyToken string
+	// VerifyTokenNamed is whether a variable was named for that token, which
+	// is a fact about the row and not its location: it names nothing and
+	// resolves nothing. A resolved token cannot tell a provider that asked for
+	// no confirmation from one whose variable is not set in this process, and
+	// those two are owed different answers.
+	VerifyTokenNamed bool
+	Header           string
+	Scheme           string
+	Algorithm        string
+	Encoding         string
+	TimestampKey     string
+	SignatureKey     string
+	Tolerance        time.Duration
 }
 
 // Request is what a verifier is allowed to look at. The body is the exact

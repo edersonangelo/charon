@@ -27,16 +27,17 @@ func (s *Store) Verification(ctx context.Context) (map[string]provider.Settings,
 	settings := make(map[string]provider.Settings, len(rows))
 	for _, row := range rows {
 		settings[row.Name] = provider.Settings{
-			Verifier:     row.Verifier,
-			Secret:       os.Getenv(row.SecretEnv),
-			VerifyToken:  os.Getenv(row.VerifyTokenEnv),
-			Header:       row.SignatureHeader.String,
-			Scheme:       row.Scheme,
-			Algorithm:    row.Algorithm,
-			Encoding:     row.Encoding,
-			TimestampKey: row.TimestampKey,
-			SignatureKey: row.SignatureKey,
-			Tolerance:    time.Duration(row.ToleranceSeconds) * time.Second,
+			Verifier:         row.Verifier,
+			Secret:           os.Getenv(row.SecretEnv),
+			VerifyToken:      os.Getenv(row.VerifyTokenEnv),
+			VerifyTokenNamed: row.VerifyTokenEnv != "",
+			Header:           row.SignatureHeader.String,
+			Scheme:           row.Scheme,
+			Algorithm:        row.Algorithm,
+			Encoding:         row.Encoding,
+			TimestampKey:     row.TimestampKey,
+			SignatureKey:     row.SignatureKey,
+			Tolerance:        time.Duration(row.ToleranceSeconds) * time.Second,
 		}
 	}
 	return settings, nil
