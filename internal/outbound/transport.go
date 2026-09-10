@@ -1,6 +1,9 @@
 package outbound
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // HTTP is the transport a destination uses unless it says otherwise. The name
 // lives here, with the domain, so storage does not have to reach into the
@@ -27,6 +30,9 @@ type Result struct {
 	// secrets. Recorded on the attempt because after a rotation the set that
 	// is configured no longer says which one went out when.
 	Signed []string
+	// RetryAfter is how long the destination asked to be left alone, when it
+	// said so. Zero means it did not, and the usual backoff decides.
+	RetryAfter time.Duration
 	// Retryable is false when the transport knows another attempt cannot
 	// help, so a delivery is not retried twelve times against a rejection
 	// that will never change.

@@ -99,6 +99,22 @@ replay, a route enabled by hand, a lease that expired.
 Retries are exponential with jitter, from `-backoff-base` up to `-backoff-cap`.
 At `-max-attempts` the delivery is dead, which is never counted as delivered.
 
+**Only what time can fix is retried.** A `5xx` or a broken connection says "not
+now"; the next attempt might land. A `4xx` says the request itself is wrong,
+and the request never changes — the same bytes go out every time, so twelve
+attempts earn the same answer twelve times and the delivery dies hours later
+than it could have. Those are settled on the first attempt.
+
+Three exceptions are believed rather than argued with: `408 Request Timeout`,
+`425 Too Early` and `429 Too Many Requests`.
+
+A destination that answers with `Retry-After` is obeyed, in either form the
+header allows, up to `-backoff-cap` — the receiver knows why it is busy and the
+backoff curve does not, but no receiver gets to hold a delivery indefinitely.
+
+A delivery settled this way is dead, not lost: the event is kept whole and
+resend is how it goes again once the receiving side is fixed.
+
 What a destination answers is kept on the attempt and shown on the event page.
 A status code is usually the whole answer, and cannot be counted on to be: a
 rejection carries a reason, a validation failure carries which field, a queue
