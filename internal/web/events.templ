@@ -55,33 +55,51 @@ templ filters(providers []string, filter console.Filter) {
 		<input type="datetime-local" name="until" value={ localTime(filter.Until) } title="received until"/>
 		<button>search</button>
 		<a href="/events"><button type="button">clear</button></a>
+		if may(ctx, authz.EventsForce) {
+			@actions()
+		}
 	</form>
-	if may(ctx, authz.EventsForce) {
-		@actions()
-	}
+}
+
+// What can be done to what is ticked. Folded away, because delivering
+// something that did not verify is rare and deliberate and should not be the
+// loudest thing on the page.
+//
+// The menu holds the action; the reason is asked for in a dialog, where there
+// is room to say what is about to happen without a form field explaining
+// itself in a placeholder.
+templ actions() {
+	<details class="actions">
+		<summary>actions</summary>
+		<div class="menu">
+			<button type="button"
+					onclick="this.closest('details').open=false;document.getElementById('why').showModal()">
+				Deliver anyway…
+			</button>
+		</div>
+	</details>
+	<dialog id="why">
+		<div class="modal-head">
+			<button type="button" onclick="this.closest('dialog').close()">close</button>
+		</div>
+		<div class="modal-body">
+			<h2>Deliver what is ticked</h2>
+			<p class="muted">
+				They stay invalid or missing. What is recorded is who decided otherwise.
+			</p>
+			<label>
+				Why
+				<input type="text" name="reason" form="force" minlength="10" required
+						placeholder="the sender rotated its token without telling us"/>
+			</label>
+			<div class="row"><button form="force">deliver</button></div>
+		</div>
+	</dialog>
 }
 
 // Delivering something that did not verify is rare and deliberate, so it is
 // folded away rather than offered. The controls belong to the form around the
 // list, which is where the ticks are, and say so by name.
-templ actions() {
-	<details class="actions">
-		<summary>actions</summary>
-		<div>
-			<label>
-				deliver what is ticked although it did not verify, because
-				<input type="text" name="reason" form="force" size="40" minlength="10"
-						placeholder="say why, in a sentence"/>
-			</label>
-			<button form="force">deliver anyway</button>
-			<p class="muted">
-				Only a request that was checked and refused can be ticked. The signature is
-				not rewritten: it stays invalid or missing, and records who let it through.
-			</p>
-		</div>
-	</details>
-}
-
 templ eventsTable(events []console.EventSummary, filter console.Filter) {
 	<div id="events">
 		if len(events) == 0 {
@@ -136,6 +154,9 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 	</div>
 }
 
+// The bar for what is ticked. It is in the flow rather than floating over the
+// page, and it is shown by the ticks themselves: no menu to find, and nothing
+// on screen until there is something to act on.
 // Only a signature that was checked and failed can be overruled. Nothing that
 // was never checked needs it, and nothing that passed is being let past.
 func refused(event console.EventSummary) bool {
