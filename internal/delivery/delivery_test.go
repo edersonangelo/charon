@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,9 +24,11 @@ import (
 var body = []byte(`{"id":"evt_1","type":"charge.succeeded"}`)
 
 type destination struct {
-	mu         sync.Mutex
-	status     atomic.Int32
-	delay      atomic.Int64
+	mu     sync.Mutex
+	status atomic.Int32
+	delay  atomic.Int64
+	// retryAfter, in seconds, sent back with the answer when set.
+	retryAfter atomic.Int64
 	calls      atomic.Int32
 	gotBody    []byte
 	gotEvent   string
@@ -41,6 +44,10 @@ func (d *destination) headers() http.Header {
 func (d *destination) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		d.calls.Add(1)
+
+		if wait := d.retryAfter.Load(); wait > 0 {
+			w.Header().Set("Retry-After", strconv.FormatInt(wait, 10))
+		}
 
 		if delay := time.Duration(d.delay.Load()); delay > 0 {
 			time.Sleep(delay)

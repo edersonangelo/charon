@@ -220,7 +220,14 @@ func (d *Dispatcher) attempt(ctx context.Context, item outbound.Delivery) {
 		limit = attempts
 	}
 
-	next := time.Now().UTC().Add(backoff(attempts, d.cfg.BackoffBase, d.cfg.BackoffCap))
+	// A destination that said how long to wait is obeyed, up to the cap the
+	// deployment set: it knows why it is busy and the curve does not. Anything
+	// longer than the cap would let one receiver hold a delivery indefinitely.
+	wait := backoff(attempts, d.cfg.BackoffBase, d.cfg.BackoffCap)
+	if result.RetryAfter > 0 {
+		wait = min(result.RetryAfter, d.cfg.BackoffCap)
+	}
+	next := time.Now().UTC().Add(wait)
 
 	if markErr := d.queue.MarkFailed(ctx, item.Tenant, item.ID, next, result.Status, detail, limit); markErr != nil {
 		d.logger.ErrorContext(ctx, "could not record a failed delivery",

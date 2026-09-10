@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/edersonangelo/charon/internal/outbound"
@@ -171,13 +172,57 @@ func (t httpTransport) Send(ctx context.Context, delivery outbound.Delivery) out
 	defer func() { _ = resp.Body.Close() }()
 
 	return outbound.Result{
-		Accepted:  resp.StatusCode >= 200 && resp.StatusCode < 300,
-		Status:    resp.StatusCode,
-		Detail:    fmt.Sprintf("destination answered %d", resp.StatusCode),
-		Answer:    t.answerOf(resp),
-		Signed:    delivery.Signing,
-		Retryable: true,
+		Accepted:   resp.StatusCode >= 200 && resp.StatusCode < 300,
+		Status:     resp.StatusCode,
+		Detail:     fmt.Sprintf("destination answered %d", resp.StatusCode),
+		Answer:     t.answerOf(resp),
+		Signed:     delivery.Signing,
+		Retryable:  worthAnotherAttempt(resp.StatusCode),
+		RetryAfter: askedToWait(resp),
 	}
+}
+
+// Retrying is for a failure that time can fix. A 5xx or a broken connection
+// says "not now"; time might help. A 4xx says the request itself is wrong, and
+// the request never changes — the same bytes go out on every attempt, so the
+// same answer comes back twelve times and the delivery dies hours later than
+// it could have, with a log that reads like a network problem.
+//
+// Three say otherwise and are believed: a timeout, being too early, and being
+// told to slow down.
+func worthAnotherAttempt(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	}
+	return status < 400 || status >= 500
+}
+
+// askedToWait reads Retry-After, in either form the specification allows. A
+// destination that says how long to wait knows better than a backoff curve
+// that knows nothing about it.
+func askedToWait(resp *http.Response) time.Duration {
+	given := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if given == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(given); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+
+	when, err := http.ParseTime(given)
+	if err != nil {
+		return 0
+	}
+	// A moment already past is not a request to wait.
+	if wait := time.Until(when); wait > 0 {
+		return wait
+	}
+	return 0
 }
 
 // A body that cannot be read is not a failed delivery: the destination already
