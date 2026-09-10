@@ -15,7 +15,8 @@ import (
 var errVerifyUsage = errors.New(
 	"usage: charon verify set -provider <name> -secret-env <VAR>\n" +
 		"         -preset <" + strings.Join(provider.PresetNames(), "|") + ">\n" +
-		"         [-verify-token-env <VAR>] for a provider that confirms the address first\n" +
+		"         [-verify-token-env <VAR>] for a provider that confirms the address first,\n" +
+		"         or [-clear-verify-token] to stop confirming it\n" +
 		"         or the parameters directly:\n" +
 		"         -verifier <" + strings.Join(provider.Default().Kinds(), "|") + ">" +
 		" -scheme <" + strings.Join(provider.Schemes(), "|") + ">" +
@@ -60,6 +61,9 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	verifyTokenEnv := fs.String("verify-token-env", "",
 		"name of the environment variable holding the token a provider offers "+
 			"when it confirms this address")
+	clearVerifyToken := fs.Bool("clear-verify-token", false,
+		"stop confirming this provider's address, forgetting the variable "+
+			"the token was read from")
 	preset := fs.String("preset", "",
 		"a named set of parameters: "+strings.Join(provider.PresetNames(), ", "))
 	slug := tenantFlag(fs)
@@ -81,6 +85,11 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return errMissingDatabaseURL
 	}
 	if *name == "" || *secretEnv == "" {
+		return errVerifyUsage
+	}
+	// Naming a variable and forgetting one are opposite instructions. Neither
+	// is required: leaving both off keeps whatever the provider already has.
+	if *verifyTokenEnv != "" && *clearVerifyToken {
 		return errVerifyUsage
 	}
 
@@ -127,10 +136,19 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 
+	stored, err := storedProvider(ctx, store, *name)
+	if err != nil {
+		return err
+	}
+	tokenEnv := chosenTokenEnv(stored.VerifyTokenEnv, *verifyTokenEnv, *clearVerifyToken)
+
+	// The written field comes from chosenTokenEnv and from nothing else:
+	// passing the flag straight through is what made a command that never
+	// mentioned the token switch the handshake off.
 	if err := store.SetProvider(ctx, postgres.ProviderSettings{
 		Name:           *name,
 		SecretEnv:      *secretEnv,
-		VerifyTokenEnv: *verifyTokenEnv,
+		VerifyTokenEnv: tokenEnv,
 		Settings:       settings,
 	}); err != nil {
 		return err
@@ -140,19 +158,59 @@ func verifySet(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		*name, settings.Verifier, *secretEnv); err != nil {
 		return err
 	}
-	if *verifyTokenEnv == "" {
-		return nil
-	}
 
-	_, err = fmt.Fprintf(stdout, "%s confirms its address with the token in %s\n",
-		*name, *verifyTokenEnv)
-	return err
+	// What the row now says, not what a flag asked for: reporting the flag is
+	// what let switching a handshake off print as though nothing had changed.
+	if tokenEnv != "" {
+		_, err = fmt.Fprintf(stdout, "%s confirms its address with the token in %s\n",
+			*name, tokenEnv)
+		return err
+	}
+	if stored.VerifyTokenEnv != "" {
+		_, err = fmt.Fprintf(stderr,
+			"warning: %q no longer confirms its address; the token in %q is not read any more\n",
+			*name, stored.VerifyTokenEnv)
+		return err
+	}
+	return nil
 }
 
 func override(field *string, given string) {
 	if given != "" {
 		*field = given
 	}
+}
+
+// storedProvider is what is already configured under a name. Saving a provider
+// rewrites every column of its row, so a flag nobody gave has to keep what is
+// there rather than read as a decision to clear it. A provider that does not
+// exist yet answers the zero value, which is the same answer as one that
+// confirms nothing.
+func storedProvider(
+	ctx context.Context, store *postgres.Store, name string,
+) (postgres.ProviderSettings, error) {
+	stored, err := store.ProviderSettings(ctx)
+	if err != nil {
+		return postgres.ProviderSettings{}, err
+	}
+	for _, item := range stored {
+		if item.Name == name {
+			return item, nil
+		}
+	}
+	return postgres.ProviderSettings{}, nil
+}
+
+// chosenTokenEnv is which variable the row should name after this command: the
+// one given, else the one already there, and nothing at all only when somebody
+// says so. Clearing is last because it is the one instruction that cannot be
+// expressed by a value.
+func chosenTokenEnv(stored, given string, clear bool) string {
+	override(&stored, given)
+	if clear {
+		return ""
+	}
+	return stored
 }
 
 func verifyPresets(stdout io.Writer) error {

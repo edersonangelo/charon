@@ -238,6 +238,7 @@ charon verify remove -provider stripe
 | `-provider` | whose requests are checked |
 | `-secret-env` | **name** of the environment variable holding the secret |
 | `-verify-token-env` | **name** of the environment variable holding the token a provider offers when it confirms the address, for one that will not accept an address until it answers |
+| `-clear-verify-token` | stop confirming the address, forgetting the variable the token was read from |
 | `-preset` | `stripe`, `charon`, `github`, `shopify`, `whatsapp-bussines`, `instagram`, `bearer-token`, `basic-auth` |
 | `-verifier` | `hmac`, `shared-token`, `basic-auth` |
 | `-scheme` | `simple`, `advanced` |
@@ -279,6 +280,12 @@ handshake configured. A variable that is named but not set in the serving
 process comes to the same `405`, which is what `verify list` reports as
 `verify token from VAR (not set in this environment)`. The token and the
 signing secret are independent: a provider can have either, both or neither.
+
+Saving a provider rewrites its whole row, so a re-run that does not name the
+variable keeps the one already stored: rotating a secret cannot switch a
+handshake off by omission. Switching one off is `-clear-verify-token`, which
+says on stderr what stopped confirming. Naming a variable and clearing one in
+the same command is refused, because they are opposite instructions.
 
 ## sign
 

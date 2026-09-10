@@ -177,6 +177,10 @@ process comes to as well, and what `charon verify list` reports.
 Like the secret, the database holds only the name of the variable. The two are
 independent: a provider can have a signature, a handshake, both, or neither.
 
+Re-running `verify set` without naming the variable keeps the one already
+stored, so rotating a secret never switches a handshake off by omission.
+`-clear-verify-token` is how one is switched off, and it says so.
+
 ## Tenants
 
 Everything recorded belongs to a tenant: events, routes, destinations,
