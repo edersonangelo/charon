@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,11 +98,35 @@ func (f Filter) Offset() int {
 	return (f.Page - 1) * f.Size()
 }
 
+// DefaultPageSize is what a page holds unless somebody says otherwise.
+const DefaultPageSize = 50
+
+// PageSizes are the sizes a page can be asked for. A closed set, because the
+// number reaches a limit clause and nothing else should decide how much of the
+// table a single request reads.
+func PageSizes() []int { return []int{25, 50, 100, 200} }
+
 func (f Filter) Size() int {
-	if f.PageSize <= 0 || f.PageSize > 200 {
-		return 50
+	if !slices.Contains(PageSizes(), f.PageSize) {
+		return DefaultPageSize
 	}
 	return f.PageSize
+}
+
+// First and Last are the positions this page holds in everything that matched,
+// counting from one. They are what the footer says, and they are known without
+// counting anything.
+func (f Filter) First() int { return f.Offset() + 1 }
+
+func (f Filter) Last(held int) int { return f.Offset() + held }
+
+// Page is what a search returned and whether anything is behind it. Knowing
+// there is more comes from reading one row past the page rather than from
+// counting everything that matched: the count would have to repeat the search,
+// and one of the things a search can do is read every recorded body.
+type Page struct {
+	Events []EventSummary
+	More   bool
 }
 
 type EventSummary struct {

@@ -70,7 +70,7 @@ type Store interface {
 	CreateTenant(ctx context.Context, slug, name string) (console.Tenant, error)
 	DeleteTenant(ctx context.Context, slug string) error
 	Placement(ctx context.Context, method string, claims []string) ([]console.Placement, error)
-	SearchEvents(ctx context.Context, filter console.Filter) ([]console.EventSummary, error)
+	SearchEvents(ctx context.Context, filter console.Filter) (console.Page, error)
 	Providers(ctx context.Context) ([]string, error)
 	EventDetail(ctx context.Context, id uuid.UUID) (console.EventDetail, error)
 	EventDeliveries(ctx context.Context, id uuid.UUID) ([]console.Delivery, error)
@@ -506,7 +506,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := parseFilter(r.Context(), r.Form)
 
-	events, err := h.store.SearchEvents(r.Context(), filter)
+	page, err := h.store.SearchEvents(r.Context(), filter)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -517,7 +517,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.page(w, r, "Events", eventsPage(events, providers, filter))
+	h.page(w, r, "Events", eventsPage(page, providers, filter))
 }
 
 func (h *Handler) event(w http.ResponseWriter, r *http.Request) {
@@ -1080,7 +1080,7 @@ func parseFilter(ctx context.Context, query url.Values) console.Filter {
 		Signature: strings.TrimSpace(query.Get("signature")),
 		Since:     parseTime(ctx, query.Get("since")),
 		Until:     parseTime(ctx, query.Get("until")),
-		PageSize:  50,
+		PageSize:  pageSize(query.Get("size")),
 	}
 	if page, err := strconv.Atoi(query.Get("page")); err == nil && page > 0 {
 		filter.Page = page
@@ -1148,8 +1148,25 @@ func pageLink(ctx context.Context, filter console.Filter, page int) string {
 	if !filter.Until.IsZero() {
 		query.Set("until", localTime(ctx, filter.Until))
 	}
+	if filter.Size() != console.DefaultPageSize {
+		query.Set("size", strconv.Itoa(filter.Size()))
+	}
 	query.Set("page", strconv.Itoa(page))
 	return "/events?" + query.Encode()
+}
+
+// How many rows a page holds. Anything that is not one of the sizes offered is
+// the default, so a hand-typed number cannot ask the database for a million
+// rows.
+func pageSize(raw string) int {
+	asked, err := strconv.Atoi(raw)
+	if err != nil {
+		return console.DefaultPageSize
+	}
+	if slices.Contains(console.PageSizes(), asked) {
+		return asked
+	}
+	return console.DefaultPageSize
 }
 
 func formatHeaders(headers map[string][]string) string {

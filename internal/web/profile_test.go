@@ -101,7 +101,7 @@ func TestChoosingAZoneChangesNothingThatWasRecorded(t *testing.T) {
 		t.Fatalf("searching: %v", err)
 	}
 
-	for _, event := range events {
+	for _, event := range events.Events {
 		if event.Provider == "acme" && !event.ReceivedAt.Equal(arrived) {
 			t.Errorf("received at %s, want %s", event.ReceivedAt, arrived)
 		}

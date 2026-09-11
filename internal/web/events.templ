@@ -13,14 +13,14 @@ import (
 	"github.com/edersonangelo/charon/internal/provider"
 )
 
-templ eventsPage(events []console.EventSummary, providers []string, filter console.Filter) {
+templ eventsPage(page console.Page, providers []string, filter console.Filter) {
 	<h1>Events</h1>
 	@filters(providers, filter)
-	@eventsTable(events, filter)
+	@eventsTable(page, filter)
 }
 
 templ filters(providers []string, filter console.Filter) {
-	<form class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
+	<form id="filters" class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
 		<input type="search" name="q" value={ filter.Search } placeholder="event id or text in body" size="32"/>
 		<select name="provider">
 			<option value="">any provider</option>
@@ -101,9 +101,9 @@ templ actions() {
 // Delivering something that did not verify is rare and deliberate, so it is
 // folded away rather than offered. The controls belong to the form around the
 // list, which is where the ticks are, and say so by name.
-templ eventsTable(events []console.EventSummary, filter console.Filter) {
+templ eventsTable(page console.Page, filter console.Filter) {
 	<div id="events">
-		if len(events) == 0 {
+		if len(page.Events) == 0 {
 			<p class="muted">Nothing matches.</p>
 		} else {
 			<form id="force" method="post" action="/events/force">
@@ -123,7 +123,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 					</tr>
 				</thead>
 				<tbody>
-					for _, event := range events {
+					for _, event := range page.Events {
 						<tr data-open
 								hx-get={ "/events/" + event.ID.String() + "/fragment" }
 								hx-target="#detail-body" hx-swap="innerHTML">
@@ -152,7 +152,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 				</tbody>
 			</table>
 			</form>
-			@pager(len(events), filter)
+			@pager(page, filter)
 		}
 	</div>
 }
@@ -198,16 +198,38 @@ templ deliveryCounts(event console.EventSummary) {
 	}
 }
 
-templ pager(count int, filter console.Filter) {
-	<p class="muted">
-		if filter.Page > 1 {
-			<a href={ templ.SafeURL(pageLink(ctx, filter, filter.Page-1)) }>previous</a>
+// How much of the list is on screen, how much fits, and how to move. It sits
+// under the table because that is where somebody who has reached the end of a
+// page looks. The size belongs to the filter form above rather than to a form
+// of its own, so changing it keeps everything that was searched for.
+templ pager(page console.Page, filter console.Filter) {
+	<div class="pager">
+		if len(page.Events) > 0 {
+			<span class="muted">
+				{ fmt.Sprintf("showing %d–%d", filter.First(), filter.Last(len(page.Events))) }
+			</span>
 		}
-		{ fmt.Sprintf(" page %d ", max(filter.Page, 1)) }
-		if count == filter.Size() {
-			<a href={ templ.SafeURL(pageLink(ctx, filter, max(filter.Page, 1)+1)) }>next</a>
-		}
-	</p>
+		<select name="size" form="filters" title="rows per page"
+				onchange="this.form.requestSubmit()">
+			for _, size := range console.PageSizes() {
+				if size == filter.Size() {
+					<option value={ fmt.Sprint(size) } selected>{ fmt.Sprintf("%d per page", size) }</option>
+				} else {
+					<option value={ fmt.Sprint(size) }>{ fmt.Sprintf("%d per page", size) }</option>
+				}
+			}
+		</select>
+		<noscript><button form="filters">apply</button></noscript>
+		<span class="steps">
+			if filter.Page > 1 {
+				<a href={ templ.SafeURL(pageLink(ctx, filter, filter.Page-1)) }>‹ previous</a>
+			}
+			<span class="muted">{ fmt.Sprintf("page %d", max(filter.Page, 1)) }</span>
+			if page.More {
+				<a href={ templ.SafeURL(pageLink(ctx, filter, max(filter.Page, 1)+1)) }>next ›</a>
+			}
+		</span>
+	</div>
 }
 
 templ eventPage(event console.EventDetail, deliveries []console.Delivery) {

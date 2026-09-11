@@ -50,8 +50,8 @@ func TestATenantOnlySeesWhatArrivedForIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("searching: %v", err)
 	}
-	if len(found) != 1 || found[0].ID != mineID {
-		t.Fatalf("a search saw %d events, want only the one recorded for that tenant", len(found))
+	if len(found.Events) != 1 || found.Events[0].ID != mineID {
+		t.Fatalf("a search saw %d events, want only the one recorded for that tenant", len(found.Events))
 	}
 
 	if _, err := store.EventDetail(ours, yoursID); !errors.Is(err, postgres.ErrNoEvent) {

@@ -172,10 +172,10 @@ func nextAttemptAt(t *testing.T, store *postgres.Store) time.Time {
 	t.Helper()
 
 	found, err := store.SearchEvents(context.Background(), console.Filter{PageSize: 5})
-	if err != nil || len(found) == 0 {
+	if err != nil || len(found.Events) == 0 {
 		t.Fatalf("reading the events: %v", err)
 	}
-	deliveries, err := store.EventDeliveries(context.Background(), found[0].ID)
+	deliveries, err := store.EventDeliveries(context.Background(), found.Events[0].ID)
 	if err != nil || len(deliveries) == 0 {
 		t.Fatalf("reading the deliveries: %v", err)
 	}

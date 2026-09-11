@@ -93,6 +93,14 @@ templ layout(title string, user string, summary Summary) {
 				   control rather than on a line of its own below it. */
 				form.filters details.actions { margin-left: auto }
 
+				/* Under the table, because that is where somebody who reached the
+				   end of a page is looking. */
+				.pager { display: flex; align-items: center; flex-wrap: wrap;
+				         gap: .75rem; margin-top: 1rem }
+				.pager .steps { margin-left: auto; display: flex; align-items: center;
+				                gap: .9rem }
+				.pager a { font-weight: 600 }
+
 				.signing { display: flex; align-items: baseline; gap: .35rem;
 				           font-size: .85rem; white-space: nowrap }
 				.signing + .signing { margin-top: .2rem }

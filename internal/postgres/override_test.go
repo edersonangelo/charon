@@ -49,7 +49,7 @@ func refusedEvents(ctx context.Context, t *testing.T, store *postgres.Store) []c
 	if err != nil {
 		t.Fatalf("reading them back: %v", err)
 	}
-	return found
+	return found.Events
 }
 
 func operatorID(ctx context.Context, t *testing.T, store *postgres.Store, email string) uuid.UUID {
@@ -219,11 +219,11 @@ func TestOnlyARefusalCanBeOverruled(t *testing.T) {
 		t.Fatalf("recording: %v", err)
 	}
 	found, err := store.SearchEvents(ctx, console.Filter{Provider: "nothing-configured", PageSize: 1})
-	if err != nil || len(found) != 1 {
+	if err != nil || len(found.Events) != 1 {
 		t.Fatalf("reading it back: %v", err)
 	}
 
-	_, err = store.Force(ctx, who, "I would like this one to go anyway", []uuid.UUID{found[0].ID})
+	_, err = store.Force(ctx, who, "I would like this one to go anyway", []uuid.UUID{found.Events[0].ID})
 	if !errors.Is(err, postgres.ErrNothingToForce) {
 		t.Errorf("got %v, want ErrNothingToForce", err)
 	}
