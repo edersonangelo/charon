@@ -415,10 +415,10 @@ func TestARedeliveryIsNotAnnouncedAsAFirstAttempt(t *testing.T) {
 	}
 
 	events, err := store.SearchEvents(ctx, console.Filter{})
-	if err != nil || len(events) == 0 {
+	if err != nil || len(events.Events) == 0 {
 		t.Fatalf("reading the event back: %v", err)
 	}
-	if _, err := store.ReplayEvent(ctx, events[0].ID); err != nil {
+	if _, err := store.ReplayEvent(ctx, events.Events[0].ID); err != nil {
 		t.Fatalf("replaying: %v", err)
 	}
 

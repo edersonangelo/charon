@@ -255,7 +255,17 @@ func (s *Store) SessionUser(ctx context.Context, digest []byte) (console.User, e
 		ID:          row.ID,
 		Email:       row.Email,
 		SystemAdmin: row.SystemAdmin,
+		TimeZone:    row.TimeZone,
 	}, nil
+}
+
+func (s *Store) SetTimeZone(ctx context.Context, user uuid.UUID, zone string) error {
+	if err := s.q.SetPanelUserTimeZone(ctx, db.SetPanelUserTimeZoneParams{
+		ID: user, TimeZone: zone,
+	}); err != nil {
+		return fmt.Errorf("setting the time zone of %s: %w", user, err)
+	}
+	return nil
 }
 
 func (s *Store) DeleteSession(ctx context.Context, digest []byte) error {
@@ -307,7 +317,11 @@ func trimTo(value string, most int) string {
 	return value[:most]
 }
 
-func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) ([]console.EventSummary, error) {
+// One row more than the page holds is asked for, and thrown away: it is the
+// whole of what the panel needs to know about whether there is a next page.
+func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) (console.Page, error) {
+	size := filter.Size()
+
 	rows, err := s.q.SearchEvents(ctx, db.SearchEventsParams{
 		TenantID:   s.tenantOf(ctx),
 		Provider:   text(filter.Provider),
@@ -316,11 +330,16 @@ func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) ([]cons
 		Search:     text(filter.Search),
 		Since:      stamp(filter.Since),
 		Until:      stamp(filter.Until),
-		PageSize:   int32(filter.Size()),   //nolint:gosec // capped at 200
+		PageSize:   int32(size) + 1,        //nolint:gosec // capped at 200
 		PageOffset: int32(filter.Offset()), //nolint:gosec // derived from page size
 	})
 	if err != nil {
-		return nil, fmt.Errorf("searching events: %w", err)
+		return console.Page{}, fmt.Errorf("searching events: %w", err)
+	}
+
+	page := console.Page{More: len(rows) > size}
+	if page.More {
+		rows = rows[:size]
 	}
 
 	events := make([]console.EventSummary, 0, len(rows))
@@ -342,7 +361,8 @@ func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) ([]cons
 			Attempts:   row.Attempts,
 		})
 	}
-	return events, nil
+	page.Events = events
+	return page, nil
 }
 
 func (s *Store) Providers(ctx context.Context) ([]string, error) {

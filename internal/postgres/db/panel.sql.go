@@ -116,7 +116,7 @@ func (q *Queries) CreatePanelUser(ctx context.Context, arg CreatePanelUserParams
 const createSSOUser = `-- name: CreateSSOUser :one
 insert into panel_user (email, oidc_subject)
 values ($1, $2)
-returning id, email, password_hash, created_at, oidc_subject, system_admin
+returning id, email, password_hash, created_at, oidc_subject, system_admin, time_zone
 `
 
 type CreateSSOUserParams struct {
@@ -134,6 +134,7 @@ func (q *Queries) CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (P
 		&i.CreatedAt,
 		&i.OidcSubject,
 		&i.SystemAdmin,
+		&i.TimeZone,
 	)
 	return i, err
 }
@@ -639,7 +640,7 @@ func (q *Queries) LeaveTenantsNoLongerNamed(ctx context.Context, arg LeaveTenant
 }
 
 const linkSubjectToUser = `-- name: LinkSubjectToUser :one
-update panel_user set oidc_subject = $2 where email = $1 returning id, email, password_hash, created_at, oidc_subject, system_admin
+update panel_user set oidc_subject = $2 where email = $1 returning id, email, password_hash, created_at, oidc_subject, system_admin, time_zone
 `
 
 type LinkSubjectToUserParams struct {
@@ -657,6 +658,7 @@ func (q *Queries) LinkSubjectToUser(ctx context.Context, arg LinkSubjectToUserPa
 		&i.CreatedAt,
 		&i.OidcSubject,
 		&i.SystemAdmin,
+		&i.TimeZone,
 	)
 	return i, err
 }
@@ -784,7 +786,7 @@ func (q *Queries) OverruleOnEvent(ctx context.Context, arg OverruleOnEventParams
 }
 
 const panelSessionUser = `-- name: PanelSessionUser :one
-select u.id, u.email, u.system_admin
+select u.id, u.email, u.system_admin, u.time_zone
 from panel_session s
 join panel_user u on u.id = s.user_id
 where s.token = $1 and s.expires_at > now()
@@ -794,17 +796,23 @@ type PanelSessionUserRow struct {
 	ID          uuid.UUID
 	Email       string
 	SystemAdmin bool
+	TimeZone    string
 }
 
 func (q *Queries) PanelSessionUser(ctx context.Context, token []byte) (PanelSessionUserRow, error) {
 	row := q.db.QueryRow(ctx, panelSessionUser, token)
 	var i PanelSessionUserRow
-	err := row.Scan(&i.ID, &i.Email, &i.SystemAdmin)
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.SystemAdmin,
+		&i.TimeZone,
+	)
 	return i, err
 }
 
 const panelUserByEmail = `-- name: PanelUserByEmail :one
-select id, email, password_hash, created_at, oidc_subject, system_admin from panel_user where email = $1
+select id, email, password_hash, created_at, oidc_subject, system_admin, time_zone from panel_user where email = $1
 `
 
 func (q *Queries) PanelUserByEmail(ctx context.Context, email string) (PanelUser, error) {
@@ -817,12 +825,13 @@ func (q *Queries) PanelUserByEmail(ctx context.Context, email string) (PanelUser
 		&i.CreatedAt,
 		&i.OidcSubject,
 		&i.SystemAdmin,
+		&i.TimeZone,
 	)
 	return i, err
 }
 
 const panelUserBySubject = `-- name: PanelUserBySubject :one
-select id, email, password_hash, created_at, oidc_subject, system_admin from panel_user where oidc_subject = $1
+select id, email, password_hash, created_at, oidc_subject, system_admin, time_zone from panel_user where oidc_subject = $1
 `
 
 func (q *Queries) PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Text) (PanelUser, error) {
@@ -835,6 +844,7 @@ func (q *Queries) PanelUserBySubject(ctx context.Context, oidcSubject pgtype.Tex
 		&i.CreatedAt,
 		&i.OidcSubject,
 		&i.SystemAdmin,
+		&i.TimeZone,
 	)
 	return i, err
 }
@@ -1547,6 +1557,20 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 		return nil, err
 	}
 	return items, nil
+}
+
+const setPanelUserTimeZone = `-- name: SetPanelUserTimeZone :exec
+update panel_user set time_zone = $2 where id = $1
+`
+
+type SetPanelUserTimeZoneParams struct {
+	ID       uuid.UUID
+	TimeZone string
+}
+
+func (q *Queries) SetPanelUserTimeZone(ctx context.Context, arg SetPanelUserTimeZoneParams) error {
+	_, err := q.db.Exec(ctx, setPanelUserTimeZone, arg.ID, arg.TimeZone)
+	return err
 }
 
 const setRole = `-- name: SetRole :one

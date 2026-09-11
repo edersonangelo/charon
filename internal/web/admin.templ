@@ -28,7 +28,7 @@ templ operatorsPage(operators []console.Operator, admins []console.Operator, rol
 								<span class="muted">a password</span>
 							}
 						</td>
-						<td class="muted">{ day(operator.CreatedAt) }</td>
+						<td class="muted">{ day(ctx, operator.CreatedAt) }</td>
 						<td>
 							if may(ctx, authz.OperatorsWrite) {
 								<form hx-post={ "/operators/" + operator.ID.String() + "/role" }
@@ -100,7 +100,7 @@ templ operatorsPage(operators []console.Operator, admins []console.Operator, rol
 										<span class="muted">a password</span>
 									}
 								</td>
-								<td class="muted">{ day(admin.CreatedAt) }</td>
+								<td class="muted">{ day(ctx, admin.CreatedAt) }</td>
 								<td>
 									<form hx-post={ "/operators/" + admin.ID.String() + "/system" }
 											hx-target="#operators" hx-select="#operators" hx-swap="outerHTML">
@@ -274,7 +274,7 @@ templ tenantsPage(tenants []console.Tenant, current uuid.UUID, isolation postgre
 						</td>
 						<td>{ tenant.Name }</td>
 						<td class="muted">/webhooks/{ tenant.Slug }/{ "{provider}" }</td>
-						<td class="muted">{ day(tenant.CreatedAt) }</td>
+						<td class="muted">{ day(ctx, tenant.CreatedAt) }</td>
 						<td>
 							if tenant.ID != current {
 								<button hx-post={ "/tenants/" + tenant.Slug + "/delete" }

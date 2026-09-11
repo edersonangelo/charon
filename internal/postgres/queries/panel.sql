@@ -24,7 +24,7 @@ insert into panel_session (token, user_id, expires_at)
 values ($1, $2, $3);
 
 -- name: PanelSessionUser :one
-select u.id, u.email, u.system_admin
+select u.id, u.email, u.system_admin, u.time_zone
 from panel_session s
 join panel_user u on u.id = s.user_id
 where s.token = $1 and s.expires_at > now();
@@ -489,3 +489,6 @@ where e.id = $1 and e.tenant_id = $2;
 
 -- name: EventsUnderOverride :many
 select id from inbound_event where override_id = $1 order by received_at;
+
+-- name: SetPanelUserTimeZone :exec
+update panel_user set time_zone = $2 where id = $1;

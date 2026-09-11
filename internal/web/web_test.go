@@ -1067,7 +1067,7 @@ func TestTheListSeparatesRoutedFromOrphanedAndShowsAttempts(t *testing.T) {
 	}
 
 	var found console.EventSummary
-	for _, event := range events {
+	for _, event := range events.Events {
 		if event.ID == eventID {
 			found = event
 		}

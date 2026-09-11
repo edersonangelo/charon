@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,14 +13,14 @@ import (
 	"github.com/edersonangelo/charon/internal/provider"
 )
 
-templ eventsPage(events []console.EventSummary, providers []string, filter console.Filter) {
+templ eventsPage(page console.Page, providers []string, filter console.Filter) {
 	<h1>Events</h1>
 	@filters(providers, filter)
-	@eventsTable(events, filter)
+	@eventsTable(page, filter)
 }
 
 templ filters(providers []string, filter console.Filter) {
-	<form class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
+	<form id="filters" class="filters" hx-get="/events" hx-target="#events" hx-select="#events" hx-swap="outerHTML" hx-push-url="true">
 		<input type="search" name="q" value={ filter.Search } placeholder="event id or text in body" size="32"/>
 		<select name="provider">
 			<option value="">any provider</option>
@@ -51,8 +52,8 @@ templ filters(providers []string, filter console.Filter) {
 				}
 			}
 		</select>
-		<input type="datetime-local" name="since" value={ localTime(filter.Since) } title="received from"/>
-		<input type="datetime-local" name="until" value={ localTime(filter.Until) } title="received until"/>
+		<input type="datetime-local" name="since" value={ localTime(ctx, filter.Since) } title="received from"/>
+		<input type="datetime-local" name="until" value={ localTime(ctx, filter.Until) } title="received until"/>
 		<button>search</button>
 		<a href="/events"><button type="button">clear</button></a>
 		if may(ctx, authz.EventsForce) {
@@ -100,9 +101,9 @@ templ actions() {
 // Delivering something that did not verify is rare and deliberate, so it is
 // folded away rather than offered. The controls belong to the form around the
 // list, which is where the ticks are, and say so by name.
-templ eventsTable(events []console.EventSummary, filter console.Filter) {
+templ eventsTable(page console.Page, filter console.Filter) {
 	<div id="events">
-		if len(events) == 0 {
+		if len(page.Events) == 0 {
 			<p class="muted">Nothing matches.</p>
 		} else {
 			<form id="force" method="post" action="/events/force">
@@ -112,7 +113,9 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 						if may(ctx, authz.EventsForce) {
 							<th></th>
 						}
-						<th>received</th>
+						<th title={ "times are shown in " + zoneName(ctx) }>
+							received <span class="muted">{ zoneName(ctx) }</span>
+						</th>
 						<th>provider</th>
 						<th>size</th>
 						<th>deliveries</th>
@@ -120,7 +123,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 					</tr>
 				</thead>
 				<tbody>
-					for _, event := range events {
+					for _, event := range page.Events {
 						<tr data-open
 								hx-get={ "/events/" + event.ID.String() + "/fragment" }
 								hx-target="#detail-body" hx-swap="innerHTML">
@@ -131,7 +134,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 									}
 								</td>
 							}
-							<td>{ stamp(event.ReceivedAt) }</td>
+							<td>{ stamp(ctx, event.ReceivedAt) }</td>
 							<td>{ event.Provider }@signatureBadge(event.Signature)@forcedBadge(event)</td>
 							<td>{ fmt.Sprintf("%d B", event.BodySize) }</td>
 							<td>@deliveryCounts(event)</td>
@@ -149,7 +152,7 @@ templ eventsTable(events []console.EventSummary, filter console.Filter) {
 				</tbody>
 			</table>
 			</form>
-			@pager(len(events), filter)
+			@pager(page, filter)
 		}
 	</div>
 }
@@ -195,16 +198,38 @@ templ deliveryCounts(event console.EventSummary) {
 	}
 }
 
-templ pager(count int, filter console.Filter) {
-	<p class="muted">
-		if filter.Page > 1 {
-			<a href={ templ.SafeURL(pageLink(filter, filter.Page-1)) }>previous</a>
+// How much of the list is on screen, how much fits, and how to move. It sits
+// under the table because that is where somebody who has reached the end of a
+// page looks. The size belongs to the filter form above rather than to a form
+// of its own, so changing it keeps everything that was searched for.
+templ pager(page console.Page, filter console.Filter) {
+	<div class="pager">
+		if len(page.Events) > 0 {
+			<span class="muted">
+				{ fmt.Sprintf("showing %d–%d", filter.First(), filter.Last(len(page.Events))) }
+			</span>
 		}
-		{ fmt.Sprintf(" page %d ", max(filter.Page, 1)) }
-		if count == filter.Size() {
-			<a href={ templ.SafeURL(pageLink(filter, max(filter.Page, 1)+1)) }>next</a>
-		}
-	</p>
+		<select name="size" form="filters" title="rows per page"
+				onchange="this.form.requestSubmit()">
+			for _, size := range console.PageSizes() {
+				if size == filter.Size() {
+					<option value={ fmt.Sprint(size) } selected>{ fmt.Sprintf("%d per page", size) }</option>
+				} else {
+					<option value={ fmt.Sprint(size) }>{ fmt.Sprintf("%d per page", size) }</option>
+				}
+			}
+		</select>
+		<noscript><button form="filters">apply</button></noscript>
+		<span class="steps">
+			if filter.Page > 1 {
+				<a href={ templ.SafeURL(pageLink(ctx, filter, filter.Page-1)) }>‹ previous</a>
+			}
+			<span class="muted">{ fmt.Sprintf("page %d", max(filter.Page, 1)) }</span>
+			if page.More {
+				<a href={ templ.SafeURL(pageLink(ctx, filter, max(filter.Page, 1)+1)) }>next ›</a>
+			}
+		</span>
+	</div>
 }
 
 templ eventPage(event console.EventDetail, deliveries []console.Delivery) {
@@ -228,12 +253,12 @@ templ eventDetail(event console.EventDetail, deliveries []console.Delivery, inMo
 						<td>
 							<strong>{ event.Overruled.Reason }</strong>
 							<div class="muted">
-								{ event.Overruled.DecidedBy } · { stamp(event.Overruled.DecidedAt) }
+								{ event.Overruled.DecidedBy } · { stamp(ctx, event.Overruled.DecidedAt) }
 							</div>
 						</td>
 					</tr>
 				}
-				<tr><th>received</th><td>{ stamp(event.ReceivedAt) }</td></tr>
+				<tr><th>received</th><td>{ stamp(ctx, event.ReceivedAt) }</td></tr>
 				<tr><th>path</th><td>{ event.Path }</td></tr>
 				<tr><th>size</th><td>{ fmt.Sprintf("%d bytes", event.BodySize) }</td></tr>
 				<tr>
@@ -343,7 +368,7 @@ templ deliveryBlock(eventID string, delivery console.Delivery, inModal bool) {
 								for _, attempt := range round.Attempts {
 									<tr>
 										<td>{ fmt.Sprint(attempt.Attempt) }</td>
-										<td>{ stamp(attempt.AttemptedAt) }</td>
+										<td>{ stamp(ctx, attempt.AttemptedAt) }</td>
 										<td>
 											if attempt.Status > 0 {
 												{ fmt.Sprint(attempt.Status) }
@@ -624,7 +649,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 							<tr>
 								<td><strong>{ provider.Provider }</strong></td>
 								<td>{ fmt.Sprint(provider.Events) }</td>
-								<td>{ stamp(provider.LastReceived) }</td>
+								<td>{ stamp(ctx, provider.LastReceived) }</td>
 								<td colspan="2">
 									if may(ctx, authz.RoutesWrite) {
 										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
@@ -734,11 +759,11 @@ templ signingState(secrets []console.SigningSecret) {
 					case !secret.Checked:
 						<span class="muted" title="the dispatcher has not reported on this one yet">not read yet</span>
 					case secret.Readable:
-						<span class="pill good" title={ "read " + stamp(secret.CheckedAt) }>readable</span>
+						<span class="pill good" title={ "read " + stamp(ctx, secret.CheckedAt) }>readable</span>
 					default:
 						<span class="pill bad" title={ secret.Detail }>unreadable</span>
 				}
-				<span class="muted">added { stamp(secret.Added) }</span>
+				<span class="muted">added { stamp(ctx, secret.Added) }</span>
 			</div>
 		}
 	}
@@ -802,25 +827,32 @@ func counted(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-func stamp(at time.Time) string {
+// The three below read an instant in the zone of whoever is looking, which is
+// the only place any conversion happens: what is recorded is the moment, and
+// the moment is the same for everybody.
+
+func stamp(ctx context.Context, at time.Time) string {
 	if at.IsZero() {
 		return "—"
 	}
-	return at.Local().Format("2006-01-02 15:04:05")
+	return at.In(zone(ctx)).Format("2006-01-02 15:04:05")
 }
 
 // day is the date alone, for columns where the second something happened is
 // not what anyone is reading.
-func day(at time.Time) string {
+func day(ctx context.Context, at time.Time) string {
 	if at.IsZero() {
 		return "—"
 	}
-	return at.Local().Format("2006-01-02")
+	return at.In(zone(ctx)).Format("2006-01-02")
 }
 
-func localTime(at time.Time) string {
+// localTime is what a datetime-local field holds, which is a wall clock with
+// no zone attached. The zone it means is the reader's, and parseTime reads it
+// back the same way.
+func localTime(ctx context.Context, at time.Time) string {
 	if at.IsZero() {
 		return ""
 	}
-	return at.Local().Format("2006-01-02T15:04")
+	return at.In(zone(ctx)).Format("2006-01-02T15:04")
 }
