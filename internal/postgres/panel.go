@@ -255,7 +255,17 @@ func (s *Store) SessionUser(ctx context.Context, digest []byte) (console.User, e
 		ID:          row.ID,
 		Email:       row.Email,
 		SystemAdmin: row.SystemAdmin,
+		TimeZone:    row.TimeZone,
 	}, nil
+}
+
+func (s *Store) SetTimeZone(ctx context.Context, user uuid.UUID, zone string) error {
+	if err := s.q.SetPanelUserTimeZone(ctx, db.SetPanelUserTimeZoneParams{
+		ID: user, TimeZone: zone,
+	}); err != nil {
+		return fmt.Errorf("setting the time zone of %s: %w", user, err)
+	}
+	return nil
 }
 
 func (s *Store) DeleteSession(ctx context.Context, digest []byte) error {

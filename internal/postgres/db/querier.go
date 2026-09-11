@@ -156,6 +156,7 @@ type Querier interface {
 	// enabled, so the numbers reconcile with the routes page. What is left over is
 	// reported apart as history.
 	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
+	SetPanelUserTimeZone(ctx context.Context, arg SetPanelUserTimeZoneParams) error
 	SetProvider(ctx context.Context, arg SetProviderParams) error
 	SetRetention(ctx context.Context, arg SetRetentionParams) (int64, error)
 	// Changing a role is what makes it the deployment's, and from then on starting

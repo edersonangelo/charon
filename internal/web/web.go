@@ -42,6 +42,7 @@ type Store interface {
 	VerifyPassword(ctx context.Context, email, password string) (string, error)
 	CreateSession(ctx context.Context, digest []byte, userID uuid.UUID, expires time.Time) error
 	SessionUser(ctx context.Context, digest []byte) (console.User, error)
+	SetTimeZone(ctx context.Context, user uuid.UUID, zone string) error
 	DeleteSession(ctx context.Context, digest []byte) error
 	UserBySubject(
 		ctx context.Context, subject, email string, place console.Placement, provision bool,
@@ -162,6 +163,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /events/force", h.allowed(authz.EventsForce, h.forceEvents))
 	mux.Handle("POST /events/{eventID}/deliveries/{id}/replay",
 		h.allowed(authz.EventsReplay, h.replayDelivery))
+	mux.Handle("GET /profile", h.signedIn(h.profile))
+	mux.Handle("POST /profile", h.signedIn(h.saveProfile))
 	mux.Handle("GET /settings", h.allowed(authz.EventsRead, h.settings))
 	mux.Handle("POST /acting-tenant", h.allowed(authz.EventsRead, h.switchTenant))
 	mux.Handle("POST /operators/system", h.allowed(authz.OperatorsWrite, h.makeSystemAdmin))
@@ -198,6 +201,7 @@ type (
 	userKey  struct{}
 	grantKey struct{}
 	pathKey  struct{}
+	zoneKey  struct{}
 )
 
 // allowed resolves the session, confines everything the request does to that
@@ -207,56 +211,89 @@ func (h *Handler) allowed(
 	needs authz.Permission, next func(http.ResponseWriter, *http.Request),
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookie)
-		if err != nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
-		digest, err := console.SessionDigest(cookie.Value)
-		if err != nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
-		user, err := h.store.SessionUser(r.Context(), digest)
-		if err != nil {
-			h.clearCookie(w)
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
-		acting, ok := h.acting(r, user)
+		request, ok := h.resolve(w, r)
 		if !ok {
-			h.logger.WarnContext(r.Context(), "the operator belongs to no tenant",
-				"email", user.Email)
-			http.Error(w, "you do not belong to any tenant yet", http.StatusForbidden)
 			return
 		}
 
-		ctx := authz.WithTenant(r.Context(), acting.Current)
-
-		role, err := h.roleFor(ctx, user, acting.Current)
-		if err != nil {
-			h.logger.ErrorContext(ctx, "could not read the role of an operator",
-				"email", user.Email, "error", err)
-			http.Error(w, "could not decide this request", http.StatusInternalServerError)
-			return
-		}
-
-		if err := role.Authorize(needs); err != nil {
-			h.logger.WarnContext(ctx, "an operator was refused",
-				"email", user.Email, "role", role.Name, "needs", needs)
+		if err := grant(request.Context()).Authorize(needs); err != nil {
+			h.logger.WarnContext(request.Context(), "an operator was refused",
+				"email", currentUser(request).Email,
+				"role", roleName(request.Context()), "needs", needs)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 
-		ctx = context.WithValue(ctx, userKey{}, user)
-		ctx = context.WithValue(ctx, grantKey{}, role)
-		ctx = context.WithValue(ctx, pathKey{}, r.URL.Path)
-		ctx = context.WithValue(ctx, actingKey{}, acting)
-		next(w, r.WithContext(ctx))
+		next(w, request)
 	})
+}
+
+// signedIn asks only that the request belongs to somebody. It is for what a
+// person changes about themselves rather than about the deployment: a role
+// grants reach into Charon, and nobody's reach should include or exclude their
+// own account.
+func (h *Handler) signedIn(next func(http.ResponseWriter, *http.Request)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request, ok := h.resolve(w, r)
+		if !ok {
+			return
+		}
+		next(w, request)
+	})
+}
+
+// resolve answers who is asking, which tenant they are acting in, what that
+// role grants and how they read a clock, and returns the request carrying all
+// of it. It has already written the refusal when it reports false.
+func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return nil, false
+	}
+
+	digest, err := console.SessionDigest(cookie.Value)
+	if err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return nil, false
+	}
+
+	user, err := h.store.SessionUser(r.Context(), digest)
+	if err != nil {
+		h.clearCookie(w)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return nil, false
+	}
+
+	acting, ok := h.acting(r, user)
+	if !ok {
+		h.logger.WarnContext(r.Context(), "the operator belongs to no tenant",
+			"email", user.Email)
+		http.Error(w, "you do not belong to any tenant yet", http.StatusForbidden)
+		return nil, false
+	}
+
+	ctx := authz.WithTenant(r.Context(), acting.Current)
+
+	role, err := h.roleFor(ctx, user, acting.Current)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "could not read the role of an operator",
+			"email", user.Email, "error", err)
+		http.Error(w, "could not decide this request", http.StatusInternalServerError)
+		return nil, false
+	}
+
+	ctx = context.WithValue(ctx, userKey{}, user)
+	ctx = context.WithValue(ctx, grantKey{}, role)
+	ctx = context.WithValue(ctx, pathKey{}, r.URL.Path)
+	ctx = context.WithValue(ctx, actingKey{}, acting)
+	ctx = context.WithValue(ctx, zoneKey{}, readingZone(user.TimeZone))
+	return r.WithContext(ctx), true
+}
+
+func grant(ctx context.Context) authz.Role {
+	role, _ := ctx.Value(grantKey{}).(authz.Role)
+	return role
 }
 
 func currentUser(r *http.Request) console.User {
@@ -467,7 +504,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	filter := parseFilter(r.Form)
+	filter := parseFilter(r.Context(), r.Form)
 
 	events, err := h.store.SearchEvents(r.Context(), filter)
 	if err != nil {
@@ -991,6 +1028,12 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request, title string, bod
 func (h *Handler) summary(ctx context.Context) Summary {
 	var summary Summary
 
+	// The header counts are event data, so a role that may not read events
+	// does not get them from the header either.
+	if !may(ctx, authz.EventsRead) {
+		return summary
+	}
+
 	states, err := h.store.DeliveryStates(ctx)
 	if err != nil {
 		h.logger.WarnContext(ctx, "could not read delivery states", "error", err)
@@ -1029,14 +1072,14 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "something went wrong", http.StatusInternalServerError)
 }
 
-func parseFilter(query url.Values) console.Filter {
+func parseFilter(ctx context.Context, query url.Values) console.Filter {
 	filter := console.Filter{
 		Provider:  strings.TrimSpace(query.Get("provider")),
 		State:     strings.TrimSpace(query.Get("state")),
 		Search:    strings.TrimSpace(query.Get("q")),
 		Signature: strings.TrimSpace(query.Get("signature")),
-		Since:     parseTime(query.Get("since")),
-		Until:     parseTime(query.Get("until")),
+		Since:     parseTime(ctx, query.Get("since")),
+		Until:     parseTime(ctx, query.Get("until")),
 		PageSize:  50,
 	}
 	if page, err := strconv.Atoi(query.Get("page")); err == nil && page > 0 {
@@ -1071,18 +1114,21 @@ func validSignature(state string) bool {
 	}
 }
 
-func parseTime(value string) time.Time {
+// parseTime reads what a datetime-local field submitted, which is a wall clock
+// and no zone. It means the zone of whoever typed it, so "since 09:00" is nine
+// in the morning where they are and not where the server is.
+func parseTime(ctx context.Context, value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	at, err := time.ParseInLocation("2006-01-02T15:04", value, time.Local)
+	at, err := time.ParseInLocation("2006-01-02T15:04", value, zone(ctx))
 	if err != nil {
 		return time.Time{}
 	}
 	return at
 }
 
-func pageLink(filter console.Filter, page int) string {
+func pageLink(ctx context.Context, filter console.Filter, page int) string {
 	query := url.Values{}
 	if filter.Provider != "" {
 		query.Set("provider", filter.Provider)
@@ -1097,10 +1143,10 @@ func pageLink(filter console.Filter, page int) string {
 		query.Set("q", filter.Search)
 	}
 	if !filter.Since.IsZero() {
-		query.Set("since", localTime(filter.Since))
+		query.Set("since", localTime(ctx, filter.Since))
 	}
 	if !filter.Until.IsZero() {
-		query.Set("until", localTime(filter.Until))
+		query.Set("until", localTime(ctx, filter.Until))
 	}
 	query.Set("page", strconv.Itoa(page))
 	return "/events?" + query.Encode()
@@ -1125,8 +1171,7 @@ func formatHeaders(headers map[string][]string) string {
 // may is what the templates ask before drawing a control, so an operator is
 // never shown an action their role would refuse.
 func may(ctx context.Context, needs authz.Permission) bool {
-	role, _ := ctx.Value(grantKey{}).(authz.Role)
-	return role.Allows(needs)
+	return grant(ctx).Allows(needs)
 }
 
 // inTenant is the tenant this request is acting for, which is what anything
@@ -1267,6 +1312,5 @@ func tenantSlug(ctx context.Context) string {
 }
 
 func roleName(ctx context.Context) string {
-	role, _ := ctx.Value(grantKey{}).(authz.Role)
-	return role.Name
+	return grant(ctx).Name
 }

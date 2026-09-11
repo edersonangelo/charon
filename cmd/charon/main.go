@@ -7,6 +7,11 @@ import (
 	"io"
 	"os"
 	"runtime"
+
+	// The release image is built from scratch and carries no zone database, so
+	// the panel could not read an instant in anybody's zone without this. It
+	// embeds the tz database in the binary.
+	_ "time/tzdata"
 )
 
 var version = "dev"

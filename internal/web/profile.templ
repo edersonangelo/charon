@@ -1,0 +1,53 @@
+package web
+
+import (
+	"time"
+
+	"github.com/edersonangelo/charon/internal/console"
+)
+
+templ profilePage(user console.User, refused string) {
+	<h1>Profile</h1>
+
+	<section>
+		<h2>account</h2>
+		<p><strong>{ user.Email }</strong> <span class="pill">{ roleName(ctx) }</span></p>
+	</section>
+
+	<section>
+		<h2>time zone</h2>
+		<p class="muted">
+			Everything is recorded as the moment it happened and stays that way.
+			This is only how those moments are shown to you.
+		</p>
+		<form method="post" action="/profile">
+			<input
+				type="text"
+				name="time_zone"
+				list="zones"
+				size="30"
+				placeholder="UTC"
+				value={ user.TimeZone }
+				aria-label="time zone"
+			/>
+			<datalist id="zones">
+				for _, name := range commonZones() {
+					<option value={ name }></option>
+				}
+			</datalist>
+			<button>save</button>
+			<button
+				type="button"
+				onclick="this.form.time_zone.value = Intl.DateTimeFormat().resolvedOptions().timeZone"
+			>
+				use this browser's
+			</button>
+		</form>
+		if refused != "" {
+			<p class="dead">{ refused }</p>
+		}
+		<p class="muted">
+			showing times in { zoneName(ctx) } — right now that reads { stamp(ctx, time.Now()) }
+		</p>
+	</section>
+}

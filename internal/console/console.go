@@ -28,6 +28,9 @@ type User struct {
 	// SystemAdmin is not a role: a role is held inside a tenant, and the whole
 	// point of this is not being confined to one.
 	SystemAdmin bool
+	// TimeZone is how this person reads a recorded instant, named the way the
+	// tz database names it. Empty is UTC.
+	TimeZone string
 }
 
 // Membership is somebody belonging to a tenant, as a role. A person can hold

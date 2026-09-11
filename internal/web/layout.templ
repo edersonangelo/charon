@@ -148,6 +148,9 @@ templ layout(title string, user string, summary Summary) {
 						<a href="/events" class={ here(ctx, "/events") }>events</a>
 						<a href="/settings" class={ inSettings(ctx) }>settings</a>
 					}
+					// Outside the check above: a profile is the person's own, and
+					// no role grants or withholds reaching it.
+					<a href="/profile" class={ here(ctx, "/profile") }>profile</a>
 				</nav>
 				<span class="right">
 				<span class="stats" id="summary">
