@@ -1442,6 +1442,33 @@ func (q *Queries) RouteByID(ctx context.Context, arg RouteByIDParams) (RouteByID
 }
 
 const searchEvents = `-- name: SearchEvents :many
+with reachable as (
+    select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
+           e.planned_at, e.override_id
+    from inbound_event e
+    where e.tenant_id = $2
+      and ($3::text is null or e.provider = $3::text)
+      and ($4::timestamptz is null or e.received_at >= $4::timestamptz)
+      and ($5::timestamptz is null or e.received_at <= $5::timestamptz)
+      and ($6::text is null or e.signature = $6::text)
+      and (
+           $7::text is null
+           or ($7::text = 'unrouted' and not exists (
+                   select 1 from delivery d
+                   where d.event_id = e.id and routed(e.provider, d.destination_id)))
+           or ($7::text <> 'unrouted' and exists (
+                   select 1 from delivery d
+                   where d.event_id = e.id
+                     and d.state = $7::text
+                     and routed(e.provider, d.destination_id)))
+      )
+      and ($8::text is null
+           or e.id::text = $8::text
+           or position($8::text in convert_from(
+                  (select r.body from inbound_request r where r.event_id = e.id), 'UTF8')) > 0)
+    order by e.received_at desc
+    limit $10 offset $9
+)
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
        (e.override_id is not null)::boolean as forced,
@@ -1456,33 +1483,15 @@ select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and not routed(e.provider, d.destination_id)), 0)::bigint as unrouted,
        coalesce((select max(d.attempts) from delivery d where d.event_id = e.id
-                 and routed(e.provider, d.destination_id)), 0)::int as attempts
-from inbound_event e
-where e.tenant_id = $1
-  and ($2::text is null or e.provider = $2::text)
-  and ($3::timestamptz is null or e.received_at >= $3::timestamptz)
-  and ($4::timestamptz is null or e.received_at <= $4::timestamptz)
-  and ($5::text is null or e.signature = $5::text)
-  and (
-       $6::text is null
-       or ($6::text = 'unrouted' and not exists (
-               select 1 from delivery d
-               where d.event_id = e.id and routed(e.provider, d.destination_id)))
-       or ($6::text <> 'unrouted' and exists (
-               select 1 from delivery d
-               where d.event_id = e.id
-                 and d.state = $6::text
-                 and routed(e.provider, d.destination_id)))
-  )
-  and ($7::text is null
-       or e.id::text = $7::text
-       or position($7::text in convert_from(
-              (select r.body from inbound_request r where r.event_id = e.id), 'UTF8')) > 0)
+                 and routed(e.provider, d.destination_id)), 0)::int as attempts,
+       (select count(*) from reachable)::int as reachable
+from reachable e
 order by e.received_at desc
-limit $9 offset $8
+limit $1
 `
 
 type SearchEventsParams struct {
+	PageSize   int32
 	TenantID   uuid.UUID
 	Provider   pgtype.Text
 	Since      pgtype.Timestamptz
@@ -1491,7 +1500,7 @@ type SearchEventsParams struct {
 	State      pgtype.Text
 	Search     pgtype.Text
 	PageOffset int32
-	PageSize   int32
+	LookAhead  int32
 }
 
 type SearchEventsRow struct {
@@ -1509,6 +1518,7 @@ type SearchEventsRow struct {
 	Pending    int64
 	Unrouted   int64
 	Attempts   int32
+	Reachable  int32
 }
 
 // The state counts only take deliveries whose destination is still routed and
@@ -1516,6 +1526,7 @@ type SearchEventsRow struct {
 // reported apart as history.
 func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error) {
 	rows, err := q.db.Query(ctx, searchEvents,
+		arg.PageSize,
 		arg.TenantID,
 		arg.Provider,
 		arg.Since,
@@ -1524,7 +1535,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 		arg.State,
 		arg.Search,
 		arg.PageOffset,
-		arg.PageSize,
+		arg.LookAhead,
 	)
 	if err != nil {
 		return nil, err
@@ -1548,6 +1559,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.Pending,
 			&i.Unrouted,
 			&i.Attempts,
+			&i.Reachable,
 		); err != nil {
 			return nil, err
 		}

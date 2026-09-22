@@ -317,11 +317,7 @@ func trimTo(value string, most int) string {
 	return value[:most]
 }
 
-// One row more than the page holds is asked for, and thrown away: it is the
-// whole of what the panel needs to know about whether there is a next page.
 func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) (console.Page, error) {
-	size := filter.Size()
-
 	rows, err := s.q.SearchEvents(ctx, db.SearchEventsParams{
 		TenantID:   s.tenantOf(ctx),
 		Provider:   text(filter.Provider),
@@ -330,16 +326,17 @@ func (s *Store) SearchEvents(ctx context.Context, filter console.Filter) (consol
 		Search:     text(filter.Search),
 		Since:      stamp(filter.Since),
 		Until:      stamp(filter.Until),
-		PageSize:   int32(size) + 1,        //nolint:gosec // capped at 200
-		PageOffset: int32(filter.Offset()), //nolint:gosec // derived from page size
+		PageSize:   int32(filter.Size()),      //nolint:gosec // capped at 200
+		LookAhead:  int32(filter.LookAhead()), //nolint:gosec // a few pages of at most 200
+		PageOffset: int32(filter.Offset()),    //nolint:gosec // derived from page size
 	})
 	if err != nil {
 		return console.Page{}, fmt.Errorf("searching events: %w", err)
 	}
 
-	page := console.Page{More: len(rows) > size}
-	if page.More {
-		rows = rows[:size]
+	var page console.Page
+	if len(rows) > 0 {
+		page.Reachable = int(rows[0].Reachable)
 	}
 
 	events := make([]console.EventSummary, 0, len(rows))

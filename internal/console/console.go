@@ -119,13 +119,40 @@ func (f Filter) First() int { return f.Offset() + 1 }
 
 func (f Filter) Last(held int) int { return f.Offset() + held }
 
-// Page is what a search returned and whether anything is behind it. Knowing
-// there is more comes from reading one row past the page rather than from
-// counting everything that matched: the count would have to repeat the search,
-// and one of the things a search can do is read every recorded body.
+// PagesAtOnce is how many page numbers the pager offers. Everything that
+// matched is never counted: the count would repeat the search, and a search can
+// read every recorded body. What is counted instead is at most this many pages
+// from the start of the one on screen, which is all the numbers need.
+const PagesAtOnce = 6
+
+func (f Filter) LookAhead() int { return f.Size() * PagesAtOnce }
+
+// Reachable is how many rows matched from the first on this page onwards,
+// counted no further than the filter's look-ahead.
 type Page struct {
-	Events []EventSummary
-	More   bool
+	Events    []EventSummary
+	Reachable int
+}
+
+func (p Page) More() bool { return p.Reachable > len(p.Events) }
+
+// The numbers keep the current page off the left edge where there is room, and
+// fill up from behind near the end, so there are always as many as there can be.
+func (p Page) Numbers(f Filter) []int {
+	current := max(f.Page, 1)
+	last := current
+	if p.Reachable > 0 {
+		last = current + (p.Reachable-1)/f.Size()
+	}
+	first := max(1, current-2)
+	last = min(last, first+PagesAtOnce-1)
+	first = max(1, last-PagesAtOnce+1)
+
+	numbers := make([]int, 0, last-first+1)
+	for n := first; n <= last; n++ {
+		numbers = append(numbers, n)
+	}
+	return numbers
 }
 
 type EventSummary struct {

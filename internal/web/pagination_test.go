@@ -179,11 +179,49 @@ func TestAPagePastTheEndSaysSoAndLeadsBack(t *testing.T) {
 	}
 }
 
+// Eight pages of the smallest size: more than the pager offers at once, so the
+// window has to move.
+func TestThePagerOffersSixPagesAroundTheOneOnScreen(t *testing.T) {
+	t.Parallel()
+
+	store, server, client, _ := setup(t)
+	recordMany(t, store, smallest*8)
+	signIn(t, server, client, password)
+
+	for _, tc := range []struct {
+		page    int
+		offered []int
+		current int
+		absent  []int
+	}{
+		{page: 1, current: 1, offered: []int{2, 3, 4, 5, 6}, absent: []int{7}},
+		{page: 5, current: 5, offered: []int{3, 4, 6, 7, 8}, absent: []int{2}},
+		{page: 8, current: 8, offered: []int{3, 4, 5, 6, 7}, absent: []int{2}},
+	} {
+		_, body := get(t, client, fmt.Sprintf("%s/events?provider=pager&size=25&page=%d", server.URL, tc.page))
+		pager := footer(body)
+
+		if !strings.Contains(pager, fmt.Sprintf(`<span class="at">%d</span>`, tc.current)) {
+			t.Errorf("page %d is not marked as the one on screen:\n%s", tc.page, pager)
+		}
+		for _, n := range tc.offered {
+			if !strings.Contains(pager, fmt.Sprintf(`page=%d&amp;provider=pager&amp;size=25">%d</a>`, n, n)) {
+				t.Errorf("page %d does not offer page %d:\n%s", tc.page, n, pager)
+			}
+		}
+		for _, n := range tc.absent {
+			if strings.Contains(pager, fmt.Sprintf(`">%d</a>`, n)) {
+				t.Errorf("page %d offers page %d, outside the six:\n%s", tc.page, n, pager)
+			}
+		}
+	}
+}
+
 // footer is the part of the page worth reading when a pagination test fails.
 func footer(page string) string {
 	at := strings.Index(page, `class="pager"`)
 	if at < 0 {
 		return "(no pager on the page)"
 	}
-	return page[at:min(at+600, len(page))]
+	return page[at:min(at+1500, len(page))]
 }

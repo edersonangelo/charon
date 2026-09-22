@@ -231,8 +231,14 @@ templ pager(page console.Page, filter console.Filter) {
 			} else {
 				<span class="muted">‹ previous</span>
 			}
-			<span class="muted">{ fmt.Sprintf("page %d", max(filter.Page, 1)) }</span>
-			if page.More {
+			for _, number := range page.Numbers(filter) {
+				if number == max(filter.Page, 1) {
+					<span class="at">{ fmt.Sprint(number) }</span>
+				} else {
+					<a href={ templ.SafeURL(pageLink(ctx, filter, number)) }>{ fmt.Sprint(number) }</a>
+				}
+			}
+			if page.More() {
 				<a href={ templ.SafeURL(pageLink(ctx, filter, max(filter.Page, 1)+1)) }>next ›</a>
 			} else {
 				<span class="muted">next ›</span>
