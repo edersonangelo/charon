@@ -84,8 +84,8 @@ func TestWhatIsPastRetentionGoes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading what is left: %v", err)
 	}
-	if len(events) != 1 {
-		t.Errorf("%d events left, want the recent one only", len(events))
+	if len(events.Events) != 1 {
+		t.Errorf("%d events left, want the recent one only", len(events.Events))
 	}
 }
 

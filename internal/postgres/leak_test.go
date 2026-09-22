@@ -54,7 +54,7 @@ func TestATenantDoesNotOutliveTheQueryThatSetIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("searching as mine: %v", err)
 		}
-		for _, event := range seen {
+		for _, event := range seen.Events {
 			if event.Provider != "mine" {
 				t.Fatalf("as one tenant, saw %q", event.Provider)
 			}
@@ -64,7 +64,7 @@ func TestATenantDoesNotOutliveTheQueryThatSetIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("searching as yours: %v", err)
 		}
-		for _, event := range seen {
+		for _, event := range seen.Events {
 			if event.Provider != "yours" {
 				t.Fatalf("as the other tenant, saw %q", event.Provider)
 			}
@@ -103,7 +103,7 @@ func TestTenantsDoNotCrossOnAContendedPool(t *testing.T) {
 						t.Errorf("searching as %s: %v", slug, err)
 						return
 					}
-					for _, event := range seen {
+					for _, event := range seen.Events {
 						if event.Provider != slug {
 							t.Errorf("as %s, saw an event of %q", slug, event.Provider)
 							return

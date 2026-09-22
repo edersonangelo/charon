@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,9 @@ type User struct {
 	// SystemAdmin is not a role: a role is held inside a tenant, and the whole
 	// point of this is not being confined to one.
 	SystemAdmin bool
+	// TimeZone is how this person reads a recorded instant, named the way the
+	// tz database names it. Empty is UTC.
+	TimeZone string
 }
 
 // Membership is somebody belonging to a tenant, as a role. A person can hold
@@ -94,11 +98,61 @@ func (f Filter) Offset() int {
 	return (f.Page - 1) * f.Size()
 }
 
+const DefaultPageSize = 50
+
+// PageSizes are the sizes a page can be asked for. A closed set, because the
+// number reaches a limit clause and nothing else should decide how much of the
+// table a single request reads.
+func PageSizes() []int { return []int{25, 50, 100, 200} }
+
 func (f Filter) Size() int {
-	if f.PageSize <= 0 || f.PageSize > 200 {
-		return 50
+	if !slices.Contains(PageSizes(), f.PageSize) {
+		return DefaultPageSize
 	}
 	return f.PageSize
+}
+
+// First and Last are the positions this page holds in everything that matched,
+// counting from one. They are what the footer says, and they are known without
+// counting anything.
+func (f Filter) First() int { return f.Offset() + 1 }
+
+func (f Filter) Last(held int) int { return f.Offset() + held }
+
+// PagesAtOnce is how many page numbers the pager offers. Everything that
+// matched is never counted: the count would repeat the search, and a search can
+// read every recorded body. What is counted instead is at most this many pages
+// from the start of the one on screen, which is all the numbers need.
+const PagesAtOnce = 6
+
+func (f Filter) LookAhead() int { return f.Size() * PagesAtOnce }
+
+// Reachable is how many rows matched from the first on this page onwards,
+// counted no further than the filter's look-ahead.
+type Page struct {
+	Events    []EventSummary
+	Reachable int
+}
+
+func (p Page) More() bool { return p.Reachable > len(p.Events) }
+
+// The numbers keep the current page off the left edge where there is room, and
+// fill up from behind near the end, so there are always as many as there can be.
+func (p Page) Numbers(f Filter) []int {
+	current := max(f.Page, 1)
+	last := current
+	if p.Reachable > 0 {
+		last = current + (p.Reachable-1)/f.Size()
+	}
+	first := max(1, current-2)
+	last = min(last, first+PagesAtOnce-1)
+	first = max(1, last-PagesAtOnce+1)
+
+	numbers := make([]int, 0, last-first+1)
+	for n := first; n <= last; n++ {
+		numbers = append(numbers, n)
+	}
+	return numbers
 }
 
 type EventSummary struct {

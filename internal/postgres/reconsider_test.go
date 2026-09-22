@@ -28,10 +28,10 @@ func arrived(ctx context.Context, t *testing.T, store *postgres.Store,
 	}
 
 	found, err := store.SearchEvents(ctx, console.Filter{Provider: name, PageSize: 1})
-	if err != nil || len(found) == 0 {
+	if err != nil || len(found.Events) == 0 {
 		t.Fatalf("reading back what arrived for %s: %v", name, err)
 	}
-	return found[0]
+	return found.Events[0]
 }
 
 func signatureOf(ctx context.Context, t *testing.T, store *postgres.Store, id string) string {
@@ -41,7 +41,7 @@ func signatureOf(ctx context.Context, t *testing.T, store *postgres.Store, id st
 	if err != nil {
 		t.Fatalf("reading the event back: %v", err)
 	}
-	for _, event := range found {
+	for _, event := range found.Events {
 		if event.ID.String() == id {
 			return event.Signature
 		}

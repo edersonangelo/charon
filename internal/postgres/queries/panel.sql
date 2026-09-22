@@ -24,7 +24,7 @@ insert into panel_session (token, user_id, expires_at)
 values ($1, $2, $3);
 
 -- name: PanelSessionUser :one
-select u.id, u.email, u.system_admin
+select u.id, u.email, u.system_admin, u.time_zone
 from panel_session s
 join panel_user u on u.id = s.user_id
 where s.token = $1 and s.expires_at > now();
@@ -57,6 +57,33 @@ order by round desc, attempted_at desc;
 -- enabled, so the numbers reconcile with the routes page. What is left over is
 -- reported apart as history.
 -- name: SearchEvents :many
+with reachable as (
+    select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
+           e.planned_at, e.override_id
+    from inbound_event e
+    where e.tenant_id = sqlc.arg(tenant_id)
+      and (sqlc.narg(provider)::text is null or e.provider = sqlc.narg(provider)::text)
+      and (sqlc.narg(since)::timestamptz is null or e.received_at >= sqlc.narg(since)::timestamptz)
+      and (sqlc.narg(until)::timestamptz is null or e.received_at <= sqlc.narg(until)::timestamptz)
+      and (sqlc.narg(signature)::text is null or e.signature = sqlc.narg(signature)::text)
+      and (
+           sqlc.narg(state)::text is null
+           or (sqlc.narg(state)::text = 'unrouted' and not exists (
+                   select 1 from delivery d
+                   where d.event_id = e.id and routed(e.provider, d.destination_id)))
+           or (sqlc.narg(state)::text <> 'unrouted' and exists (
+                   select 1 from delivery d
+                   where d.event_id = e.id
+                     and d.state = sqlc.narg(state)::text
+                     and routed(e.provider, d.destination_id)))
+      )
+      and (sqlc.narg(search)::text is null
+           or e.id::text = sqlc.narg(search)::text
+           or position(sqlc.narg(search)::text in convert_from(
+                  (select r.body from inbound_request r where r.event_id = e.id), 'UTF8')) > 0)
+    order by e.received_at desc
+    limit sqlc.arg(look_ahead) offset sqlc.arg(page_offset)
+)
 select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        (e.planned_at is not null)::boolean as planned,
        (e.override_id is not null)::boolean as forced,
@@ -71,30 +98,11 @@ select e.id, e.provider, e.path, e.received_at, e.body_size, e.signature,
        coalesce((select count(*) from delivery d where d.event_id = e.id
                  and not routed(e.provider, d.destination_id)), 0)::bigint as unrouted,
        coalesce((select max(d.attempts) from delivery d where d.event_id = e.id
-                 and routed(e.provider, d.destination_id)), 0)::int as attempts
-from inbound_event e
-where e.tenant_id = sqlc.arg(tenant_id)
-  and (sqlc.narg(provider)::text is null or e.provider = sqlc.narg(provider)::text)
-  and (sqlc.narg(since)::timestamptz is null or e.received_at >= sqlc.narg(since)::timestamptz)
-  and (sqlc.narg(until)::timestamptz is null or e.received_at <= sqlc.narg(until)::timestamptz)
-  and (sqlc.narg(signature)::text is null or e.signature = sqlc.narg(signature)::text)
-  and (
-       sqlc.narg(state)::text is null
-       or (sqlc.narg(state)::text = 'unrouted' and not exists (
-               select 1 from delivery d
-               where d.event_id = e.id and routed(e.provider, d.destination_id)))
-       or (sqlc.narg(state)::text <> 'unrouted' and exists (
-               select 1 from delivery d
-               where d.event_id = e.id
-                 and d.state = sqlc.narg(state)::text
-                 and routed(e.provider, d.destination_id)))
-  )
-  and (sqlc.narg(search)::text is null
-       or e.id::text = sqlc.narg(search)::text
-       or position(sqlc.narg(search)::text in convert_from(
-              (select r.body from inbound_request r where r.event_id = e.id), 'UTF8')) > 0)
+                 and routed(e.provider, d.destination_id)), 0)::int as attempts,
+       (select count(*) from reachable)::int as reachable
+from reachable e
 order by e.received_at desc
-limit sqlc.arg(page_size) offset sqlc.arg(page_offset);
+limit sqlc.arg(page_size);
 
 -- name: DistinctProviders :many
 select distinct provider from inbound_event where tenant_id = $1 order by provider;
@@ -489,3 +497,6 @@ where e.id = $1 and e.tenant_id = $2;
 
 -- name: EventsUnderOverride :many
 select id from inbound_event where override_id = $1 order by received_at;
+
+-- name: SetPanelUserTimeZone :exec
+update panel_user set time_zone = $2 where id = $1;

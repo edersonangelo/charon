@@ -113,6 +113,7 @@ type PanelUser struct {
 	CreatedAt    time.Time
 	OidcSubject  pgtype.Text
 	SystemAdmin  bool
+	TimeZone     string
 }
 
 type Permission struct {

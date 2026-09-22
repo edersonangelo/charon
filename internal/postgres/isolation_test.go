@@ -61,8 +61,8 @@ func TestTheDatabaseRefusesAnotherTenantEvenWhenTheQueryDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("searching as the first tenant: %v", err)
 	}
-	if len(found) != 1 || found[0].ID != mineID {
-		t.Errorf("saw %d events, want only the one recorded for that tenant", len(found))
+	if len(found.Events) != 1 || found.Events[0].ID != mineID {
+		t.Errorf("saw %d events, want only the one recorded for that tenant", len(found.Events))
 	}
 
 	// Nothing said which tenant, so the database answers for the one every
@@ -72,14 +72,14 @@ func TestTheDatabaseRefusesAnotherTenantEvenWhenTheQueryDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("searching with no tenant: %v", err)
 	}
-	for _, event := range blind {
+	for _, event := range blind.Events {
 		if event.ID == yoursID {
 			t.Error("a query that named no tenant reached another tenant's events")
 		}
 	}
-	if len(blind) != 1 || blind[0].ID != mineID {
+	if len(blind.Events) != 1 || blind.Events[0].ID != mineID {
 		t.Errorf("a query for no tenant saw %d events, want the default tenant's one",
-			len(blind))
+			len(blind.Events))
 	}
 }
 
