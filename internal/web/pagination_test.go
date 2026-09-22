@@ -17,6 +17,13 @@ const (
 	plenty   = 60
 )
 
+// A step is offered when it is a link. Where it cannot be taken it is still
+// shown, greyed, so the controls stay where they were on the page before.
+const (
+	offersPrevious = "‹ previous</a>"
+	offersNext     = "next ›</a>"
+)
+
 func recordMany(t *testing.T, store *postgres.Store, n int) {
 	t.Helper()
 
@@ -38,10 +45,10 @@ func TestTheLastPageOffersNoNextEvenWhenItIsFull(t *testing.T) {
 	if !strings.Contains(page, "showing 1–25") {
 		t.Errorf("the footer does not say what is on screen:\n%s", footer(page))
 	}
-	if strings.Contains(page, "next ›") {
+	if strings.Contains(page, offersNext) {
 		t.Errorf("a full last page still offered a next page:\n%s", footer(page))
 	}
-	if strings.Contains(page, "‹ previous") {
+	if strings.Contains(page, offersPrevious) {
 		t.Errorf("the first page offered a previous page:\n%s", footer(page))
 	}
 }
@@ -55,7 +62,7 @@ func TestPagingForwardAndBackKeepsCountingFromTheSamePlace(t *testing.T) {
 
 	first := server.URL + "/events?provider=pager&size=25"
 	_, one := get(t, client, first)
-	if !strings.Contains(one, "showing 1–25") || !strings.Contains(one, "next ›") {
+	if !strings.Contains(one, "showing 1–25") || !strings.Contains(one, offersNext) {
 		t.Errorf("the first of three pages is wrong:\n%s", footer(one))
 	}
 
@@ -63,10 +70,10 @@ func TestPagingForwardAndBackKeepsCountingFromTheSamePlace(t *testing.T) {
 	if !strings.Contains(three, "showing 51–60") {
 		t.Errorf("the last page does not say it holds the remainder:\n%s", footer(three))
 	}
-	if strings.Contains(three, "next ›") {
+	if strings.Contains(three, offersNext) {
 		t.Errorf("the last page offered a next page:\n%s", footer(three))
 	}
-	if !strings.Contains(three, "‹ previous") {
+	if !strings.Contains(three, offersPrevious) {
 		t.Errorf("the last page offered no way back:\n%s", footer(three))
 	}
 }
@@ -125,7 +132,7 @@ func TestTheSizeControlCarriesTheSearchWithIt(t *testing.T) {
 	if !strings.Contains(page, `id="filters"`) {
 		t.Errorf("there is no filter form for it to belong to")
 	}
-	if !strings.Contains(page, "next ›") {
+	if !strings.Contains(page, offersNext) {
 		t.Fatalf("expected more than one page")
 	}
 	if !strings.Contains(page, "provider=pager") {
@@ -133,6 +140,23 @@ func TestTheSizeControlCarriesTheSearchWithIt(t *testing.T) {
 	}
 	if !strings.Contains(page, "size=25") {
 		t.Errorf("the link to the next page dropped the size:\n%s", footer(page))
+	}
+}
+
+func TestTheStepsStayInPlaceOnTheFirstAndTheLastPage(t *testing.T) {
+	t.Parallel()
+
+	store, server, client, _ := setup(t)
+	recordMany(t, store, plenty)
+	signIn(t, server, client, password)
+
+	for _, page := range []string{"1", "3"} {
+		_, body := get(t, client, server.URL+"/events?provider=pager&size=25&page="+page)
+		pager := footer(body)
+
+		if !strings.Contains(pager, "‹ previous") || !strings.Contains(pager, "next ›") {
+			t.Errorf("page %s lost a step, so the other one moved:\n%s", page, pager)
+		}
 	}
 }
 
