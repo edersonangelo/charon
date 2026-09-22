@@ -1080,8 +1080,10 @@ func parseFilter(ctx context.Context, query url.Values) console.Filter {
 		Signature: strings.TrimSpace(query.Get("signature")),
 		Since:     parseTime(ctx, query.Get("since")),
 		Until:     parseTime(ctx, query.Get("until")),
-		PageSize:  pageSize(query.Get("size")),
 	}
+	// A size that is not a number, or not one of those offered, is left for
+	// Filter.Size to turn into the default.
+	filter.PageSize, _ = strconv.Atoi(query.Get("size"))
 	if page, err := strconv.Atoi(query.Get("page")); err == nil && page > 0 {
 		filter.Page = page
 	} else {
@@ -1153,20 +1155,6 @@ func pageLink(ctx context.Context, filter console.Filter, page int) string {
 	}
 	query.Set("page", strconv.Itoa(page))
 	return "/events?" + query.Encode()
-}
-
-// How many rows a page holds. Anything that is not one of the sizes offered is
-// the default, so a hand-typed number cannot ask the database for a million
-// rows.
-func pageSize(raw string) int {
-	asked, err := strconv.Atoi(raw)
-	if err != nil {
-		return console.DefaultPageSize
-	}
-	if slices.Contains(console.PageSizes(), asked) {
-		return asked
-	}
-	return console.DefaultPageSize
 }
 
 func formatHeaders(headers map[string][]string) string {

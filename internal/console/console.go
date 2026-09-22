@@ -98,7 +98,6 @@ func (f Filter) Offset() int {
 	return (f.Page - 1) * f.Size()
 }
 
-// DefaultPageSize is what a page holds unless somebody says otherwise.
 const DefaultPageSize = 50
 
 // PageSizes are the sizes a page can be asked for. A closed set, because the
