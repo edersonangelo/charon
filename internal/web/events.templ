@@ -103,7 +103,12 @@ templ actions() {
 // list, which is where the ticks are, and say so by name.
 templ eventsTable(page console.Page, filter console.Filter) {
 	<div id="events">
-		if len(page.Events) == 0 {
+		if len(page.Events) == 0 && filter.Page > 1 {
+			<p class="muted">
+				{ fmt.Sprintf("Page %d is past the end of what matched.", filter.Page) }
+				<a href={ templ.SafeURL(pageLink(ctx, filter, 1)) }>back to the first page</a>
+			</p>
+		} else if len(page.Events) == 0 {
 			<p class="muted">Nothing matches.</p>
 		} else {
 			<form id="force" method="post" action="/events/force">

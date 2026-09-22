@@ -160,6 +160,25 @@ func TestTheStepsStayInPlaceOnTheFirstAndTheLastPage(t *testing.T) {
 	}
 }
 
+// Somebody who follows an old link, or pages forward while events are purged,
+// can land past the end. The search still matches; this page is simply empty.
+func TestAPagePastTheEndSaysSoAndLeadsBack(t *testing.T) {
+	t.Parallel()
+
+	store, server, client, _ := setup(t)
+	recordMany(t, store, smallest)
+	signIn(t, server, client, password)
+
+	_, page := get(t, client, server.URL+"/events?provider=pager&size=25&page=5")
+
+	if strings.Contains(page, "Nothing matches.") {
+		t.Errorf("a page past the end claims the search matched nothing")
+	}
+	if !strings.Contains(page, "page=1") {
+		t.Errorf("a page past the end offers no way back to the first page")
+	}
+}
+
 // footer is the part of the page worth reading when a pagination test fails.
 func footer(page string) string {
 	at := strings.Index(page, `class="pager"`)
