@@ -19,10 +19,25 @@ set leased_until = now() + make_interval(secs => $1::float)
 where id in (
     select dl.id from delivery dl
     join destination d on d.id = dl.destination_id
+    join inbound_event e on e.id = dl.event_id
     where dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
       and d.enabled
+      and not exists (
+          select 1 from delivery ahead
+          join inbound_event arrived_before on arrived_before.id = ahead.event_id
+          where ahead.destination_id = dl.destination_id
+            and ahead.state = 'pending'
+            and arrived_before.provider = e.provider
+            and (arrived_before.received_at, arrived_before.id) < (e.received_at, e.id)
+      )
+      and not exists (
+          select 1 from inbound_event unplanned
+          where unplanned.planned_at is null
+            and unplanned.provider = e.provider
+            and (unplanned.received_at, unplanned.id) < (e.received_at, e.id)
+      )
     order by dl.next_attempt_at
     limit $2
     for update of dl skip locked
@@ -47,6 +62,10 @@ type ClaimDeliveriesRow struct {
 // waiting, keeping its attempts, instead of being spent against somewhere that
 // was deliberately taken out of service — which would leave a delivery dead by
 // the time it came back.
+//
+// A dead delivery lets the next one go rather than holding the route forever.
+// An earlier event not yet planned holds it, because another dispatcher may be
+// about to plan it.
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, claimDeliveries, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {

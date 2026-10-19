@@ -18,6 +18,10 @@ type Querier interface {
 	// waiting, keeping its attempts, instead of being spent against somewhere that
 	// was deliberately taken out of service — which would leave a delivery dead by
 	// the time it came back.
+	//
+	// A dead delivery lets the next one go rather than holding the route forever.
+	// An earlier event not yet planned holds it, because another dispatcher may be
+	// about to plan it.
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered, unless somebody
 	// overruled that deliberately and said why. One that was never checked is

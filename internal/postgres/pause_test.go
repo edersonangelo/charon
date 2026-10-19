@@ -140,8 +140,8 @@ func TestWhatArrivesWhileItIsOffGoesWhenItComesBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claiming after it came back: %v", err)
 	}
-	if len(claimed) != 2 {
-		t.Errorf("claimed %d, want both that arrived while it was off", len(claimed))
+	if len(claimed) != 1 || string(claimed[0].Body) != `{"n":1}` {
+		t.Errorf("claimed %d, want the first of the two that arrived while it was off", len(claimed))
 	}
 }
 

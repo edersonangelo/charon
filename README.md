@@ -257,6 +257,13 @@ discarded and it is not marked as handled: the moment a route appears, the next
 dispatch round delivers it. Configuring the route after the first event arrives
 costs nothing.
 
+A route delivers its events in the order they arrived, one at a time: the next
+one goes only when the one before it was delivered or gave up. A delivery
+waiting out a retry holds the ones behind it. One that reaches the attempt limit
+lets the next go and stays in the panel to be replayed. Routes do not wait for
+each other, so two providers sent to the same destination go side by side. A
+long backlog to one route is delivered one request per dispatch round.
+
 ## Delivery
 
 `charon dispatch` claims due deliveries under a lease, posts the raw body to the
@@ -305,7 +312,8 @@ build step and no external assets. Sign in with an operator created by
 - **Replay** a single delivery or every delivery of an event. A replay resets
   the delivery to pending and announces it, so it is picked up immediately. It
   does not erase the attempt history, and it unplans the event so a route added
-  since is included.
+  since is included. A replayed event keeps its place in the order of arrival,
+  so it goes ahead of anything newer still waiting on the same route.
 
 Replaying is a real redelivery, not a simulation. The destination will receive
 the event again, which is the same situation described below.
