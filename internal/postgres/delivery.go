@@ -296,7 +296,8 @@ func (s *Store) AddRoute(
 	ctx context.Context, provider, destination, url, transport string,
 	alreadyRecorded console.AlreadyRecorded,
 ) error {
-	if _, err := console.ParseAlreadyRecorded(string(alreadyRecorded)); err != nil {
+	alreadyRecorded, err := console.ParseAlreadyRecorded(string(alreadyRecorded))
+	if err != nil {
 		return err
 	}
 	if transport == "" {

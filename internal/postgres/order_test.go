@@ -411,3 +411,26 @@ func TestAReplayWaitsForWhatIsAlreadyInFlightOnItsRoute(t *testing.T) {
 		t.Errorf("claimed %v while the second was still in flight on the same route", bodies(alongside))
 	}
 }
+
+func TestAChoiceWithSpaceAroundItIsTheChoiceThatWasMade(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "padded")
+
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, time.Now())
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http",
+		console.AlreadyRecorded(" deliver ")); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Errorf("claimed %v, want what was recorded delivered as chosen", bodies(claimed))
+	}
+}
