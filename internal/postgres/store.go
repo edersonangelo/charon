@@ -79,6 +79,15 @@ func (s *Store) pin(ctx context.Context, conn *pgx.Conn) (bool, error) {
 		s.pinned.Delete(conn)
 		return false, fmt.Errorf("setting the tenant of a connection: %w", err)
 	}
+	// A plan kept on the connection was made for the tenant it had then: the
+	// planner reads the tenant to weigh how many rows it will find. Reused for
+	// another, a plan made for a tenant with nothing was a scan of everything,
+	// and the dispatcher, which asks each tenant in turn, paid for it on every
+	// question.
+	if _, err := conn.Exec(ctx, "discard plans"); err != nil {
+		s.pinned.Delete(conn)
+		return false, fmt.Errorf("forgetting the plans made for the previous tenant: %w", err)
+	}
 	s.pinned.Store(conn, wanted)
 	return true, nil
 }

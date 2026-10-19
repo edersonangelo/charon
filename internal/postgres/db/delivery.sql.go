@@ -17,9 +17,10 @@ const claimDeliveries = `-- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => $1::float)
 where id in (
-    select dl.id from delivery dl
+    select dl.id
+    from delivery dl
     join destination d on d.id = dl.destination_id
-    where dl.id in (select first_waiting_of_each_route())
+    where dl.id = any (array(select first_waiting_of_each_route()))
       and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
@@ -84,11 +85,30 @@ select e.id, e.tenant_id, e.provider, e.signature,
        (e.override_id is not null)::boolean as overridden
 from inbound_event e
 where e.planned_at is null
-  and ((e.signature in ('invalid', 'missing') and e.override_id is null)
-       or wanted_by_a_route(e.provider, e.id))
+  and e.id in (
+      (select refused.id
+       from inbound_event refused
+       where refused.tenant_id = current_tenant() and refused.planned_at is null
+         and refused.signature in ('invalid', 'missing') and refused.override_id is null
+       order by refused.id
+       limit $1)
+      union
+      (select wanted.id
+       from route r
+       join destination d on d.id = r.destination_id and d.enabled
+       cross join lateral (
+           select unplanned.id
+           from inbound_event unplanned
+           where unplanned.tenant_id = current_tenant() and unplanned.provider = r.provider
+             and unplanned.planned_at is null
+             and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+           order by unplanned.id
+           limit $1
+       ) wanted)
+  )
 order by e.id
 limit $1
-for update skip locked
+for update of e skip locked
 `
 
 type ClaimUnplannedEventsRow struct {
@@ -103,10 +123,12 @@ type ClaimUnplannedEventsRow struct {
 // overruled that deliberately and said why. One that was never checked is
 // delivered: a provider with no verifier configured behaves as before.
 //
-// An event no route wants is left out: taking it would spend the batch on it
-// every round, and a tenant with enough of them would never plan again.
-func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error) {
-	rows, err := q.db.Query(ctx, claimUnplannedEvents, limit)
+// Only what can be settled now is read: what a route wants, from where that
+// route starts, and what was refused. An event no route wants, or one a route
+// chose to skip, is never read again, so however many of them pile up they
+// cost planning nothing.
+func (q *Queries) ClaimUnplannedEvents(ctx context.Context, batchSize int32) ([]ClaimUnplannedEventsRow, error) {
+	rows, err := q.db.Query(ctx, claimUnplannedEvents, batchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +267,7 @@ where r.tenant_id = $1
   and ($3::varchar is null or r.provider = $3::varchar)
   and e.planned_at is not null
   and (e.signature in ('unchecked', 'valid') or e.override_id is not null)
-  and recorded_since(e.id, r.events_recorded_from)
+  and e.id >= first_id_recorded_at(r.events_recorded_from)
 on conflict (event_id, destination_id) do nothing
 `
 
@@ -329,7 +351,7 @@ select d.id from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1
   and r.provider = $2
-  and recorded_since($3::uuid, r.events_recorded_from)
+  and $3::uuid >= first_id_recorded_at(r.events_recorded_from)
   and d.enabled
 `
 
@@ -492,21 +514,32 @@ with next as (
     select least(
         (select min(dl.next_attempt_at)
          from delivery dl
-         join destination d on d.id = dl.destination_id
-         where dl.id in (select first_waiting_of_each_route()) and d.enabled),
+         join destination d on d.id = dl.destination_id and d.enabled
+         where dl.id = any (array(select first_waiting_of_each_route()))),
         -- A route in flight holds what is behind it until the attempt is
         -- recorded, or until its lease runs out because the worker died.
         (select min(flying.leased_until)
          from delivery flying
          join destination d on d.id = flying.destination_id and d.enabled
-         where flying.state = 'pending'
+         where flying.tenant_id = current_tenant() and flying.state = 'pending'
            and flying.leased_until is not null and flying.leased_until > now()),
         (select case when exists (
-                    select 1 from inbound_event e
-                    where e.planned_at is null
-                      and (e.signature in ('unchecked', 'valid')
-                           or e.override_id is not null)
-                      and wanted_by_a_route(e.provider, e.id)
+                    select 1 from inbound_event refused
+                    where refused.tenant_id = current_tenant() and refused.planned_at is null
+                      and refused.signature in ('invalid', 'missing') and refused.override_id is null
+                ) or exists (
+                    select 1
+                    from route r
+                    join destination d on d.id = r.destination_id and d.enabled
+                    cross join lateral (
+                        select 1
+                        from inbound_event unplanned
+                        where unplanned.tenant_id = current_tenant()
+                          and unplanned.provider = r.provider
+                          and unplanned.planned_at is null
+                          and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+                        limit 1
+                    ) wanted
                 ) then now() end)
     ) as at
 )

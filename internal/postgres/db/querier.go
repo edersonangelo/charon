@@ -28,9 +28,11 @@ type Querier interface {
 	// overruled that deliberately and said why. One that was never checked is
 	// delivered: a provider with no verifier configured behaves as before.
 	//
-	// An event no route wants is left out: taking it would spend the batch on it
-	// every round, and a tenant with enough of them would never plan again.
-	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
+	// Only what can be settled now is read: what a route wants, from where that
+	// route starts, and what was refused. An event no route wants, or one a route
+	// chose to skip, is never read again, so however many of them pile up they
+	// cost planning nothing.
+	ClaimUnplannedEvents(ctx context.Context, batchSize int32) ([]ClaimUnplannedEventsRow, error)
 	ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error
 	ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
 	ClearSystemAdminByEmail(ctx context.Context, email string) (int64, error)
