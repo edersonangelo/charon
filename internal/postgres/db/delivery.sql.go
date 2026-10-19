@@ -218,11 +218,12 @@ func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationPa
 	return i, err
 }
 
-const createRoute = `-- name: CreateRoute :exec
+const createRoute = `-- name: CreateRoute :one
 insert into route (tenant_id, provider, destination_id, events_received_from)
 values ($1, $2, $3,
         case when $4::boolean then '-infinity'::timestamptz else now() end)
 on conflict (tenant_id, provider, destination_id) do nothing
+returning id
 `
 
 type CreateRouteParams struct {
@@ -232,14 +233,16 @@ type CreateRouteParams struct {
 	DeliverRecorded bool
 }
 
-func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) error {
-	_, err := q.db.Exec(ctx, createRoute,
+func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createRoute,
 		arg.TenantID,
 		arg.Provider,
 		arg.DestinationID,
 		arg.DeliverRecorded,
 	)
-	return err
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const deliveryTarget = `-- name: DeliveryTarget :one

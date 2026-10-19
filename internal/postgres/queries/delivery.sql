@@ -6,11 +6,12 @@ returning *;
 -- name: DestinationByName :one
 select * from destination where tenant_id = $1 and name = $2;
 
--- name: CreateRoute :exec
+-- name: CreateRoute :one
 insert into route (tenant_id, provider, destination_id, events_received_from)
 values ($1, $2, $3,
         case when sqlc.arg(deliver_recorded)::boolean then '-infinity'::timestamptz else now() end)
-on conflict (tenant_id, provider, destination_id) do nothing;
+on conflict (tenant_id, provider, destination_id) do nothing
+returning id;
 
 -- name: ListRoutes :many
 select r.provider, d.name, d.url, d.transport, d.enabled,

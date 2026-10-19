@@ -45,7 +45,7 @@ type Querier interface {
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
 	CreatePanelSession(ctx context.Context, arg CreatePanelSessionParams) error
 	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error)
-	CreateRoute(ctx context.Context, arg CreateRouteParams) error
+	CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error)
 	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
 	CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)

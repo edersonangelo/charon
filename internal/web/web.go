@@ -728,7 +728,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.store.AddRoute(r.Context(), provider, destination, target, transport, alreadyRecorded); err != nil {
 		if errors.Is(err, postgres.ErrAlreadyRouted) {
-			http.Error(w, provider+" already delivers to that url", http.StatusConflict)
+			http.Error(w, provider+" already delivers to that destination", http.StatusConflict)
 			return
 		}
 		h.fail(w, r, err)

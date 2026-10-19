@@ -244,3 +244,31 @@ func TestTwoDispatchersNeverTakeTwoFromOneRoute(t *testing.T) {
 		t.Errorf("claimed %d at once from one route, want 1", claimed)
 	}
 }
+
+func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "routed-twice")
+
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, time.Now())
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.SkipAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/other", "http",
+		console.DeliverAlreadyRecorded); err == nil {
+		t.Error("routing erp to sink a second time succeeded, and its choice was ignored")
+	}
+
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Errorf("claimed %v: the route that skips the past delivered it", bodies(claimed))
+	}
+}

@@ -22,7 +22,7 @@ import (
 
 var (
 	ErrNoDestination = errors.New("no destination with that name")
-	ErrAlreadyRouted = errors.New("this provider already delivers to that url")
+	ErrAlreadyRouted = errors.New("this provider already delivers to that destination")
 )
 
 // Creates the delivery rows a recorded event is owed, one per enabled route
@@ -343,10 +343,14 @@ func (s *Store) AddRoute(
 	}
 
 	deliverRecorded := alreadyRecorded == console.DeliverAlreadyRecorded
-	if err := q.CreateRoute(ctx, db.CreateRouteParams{
+	_, err = q.CreateRoute(ctx, db.CreateRouteParams{
 		TenantID: s.tenantOf(ctx), Provider: provider, DestinationID: existing.ID,
 		DeliverRecorded: deliverRecorded,
-	}); err != nil {
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAlreadyRouted
+	}
+	if err != nil {
 		return fmt.Errorf("creating the route: %w", err)
 	}
 
