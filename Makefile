@@ -3,15 +3,19 @@ BIN              := $(CURDIR)/bin
 BINARY           := charon
 VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS          := -s -w -X main.version=$(VERSION)
-GOLANGCI_VERSION ?= latest
+# Pinned, because generate-check compares against what was committed and lint
+# against what was clean: a tool released since would fail CI on code that did
+# not change.
+GOLANGCI_VERSION ?= v2.15.0
 GOLANGCI         := $(BIN)/golangci-lint
 SQLC             := $(BIN)/sqlc
-SQLC_VERSION     ?= latest
+SQLC_VERSION     ?= v1.31.1
 TEST_DB          := charon-test-postgres
 TEST_DB_PORT     ?= 5440
 TEST_DATABASE_URL := postgres://charon:charon@localhost:$(TEST_DB_PORT)/charon?sslmode=disable
 TEMPL            := $(BIN)/templ
-TEMPL_VERSION    ?= latest
+# The generator has to be the templ the code runs against.
+TEMPL_VERSION    ?= $(shell $(GO) list -m -f '{{.Version}}' github.com/a-h/templ)
 
 .DEFAULT_GOAL := help
 .PHONY: help tools generate generate-check test-db test-db-stop fmt fmt-check vet lint test test-race build ci hooks db-up db-down db-logs clean

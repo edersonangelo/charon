@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -622,6 +623,19 @@ templ transportChoice(transports []string) {
 	}
 }
 
+templ alreadyRecordedChoice(deliverLabel string) {
+	<label><input type="radio" name="already_recorded" value={ string(console.DeliverAlreadyRecorded) } required/> { deliverLabel }</label>
+	<label><input type="radio" name="already_recorded" value={ string(console.SkipAlreadyRecorded) } required/> only new ones</label>
+}
+
+templ routeDeliveries(route console.RouteRow) {
+	if route.AlreadyRecorded == console.SkipAlreadyRecorded {
+		<span class="muted">{ counted(int(route.Deliveries), "delivery") }, only events since { stamp(ctx, route.EventsRecordedFrom) }</span>
+	} else {
+		<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+	}
+}
+
 templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider, unsigned []console.UnsignedDestination, transports []string) {
 	<div id="routes">
 		@settingsNav("/routes")
@@ -652,8 +666,8 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 				<h2>Received, but going nowhere</h2>
 				<p class="muted">
 					These providers have sent events that are recorded and waiting. They have no
-					route, so nothing has been delivered. Give one a destination and every event
-					it already sent is picked up.
+					route, so nothing has been delivered. Give one a destination and choose whether
+					what it already sent goes too.
 				</p>
 				<table>
 					<thead>
@@ -668,11 +682,12 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 								<td colspan="2">
 									if may(ctx, authz.RoutesWrite) {
 										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-												hx-confirm={ fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider) }>
+												hx-on::confirm={ confirmBeforeDeliveringRecorded(fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider)) }>
 											<input type="hidden" name="provider" value={ provider.Provider }/>
 											<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
 											<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
 											@transportChoice(transports)
+											@alreadyRecordedChoice(fmt.Sprintf("deliver the %d recorded", provider.Events))
 											<button>create route</button>
 										</form>
 									} else {
@@ -688,9 +703,11 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 		<section>
 			<h2>Configured</h2>
 			<p class="muted">
-				Adding a route, or switching a destination back on, delivers every event already
-				recorded for that provider. Changing where a route points does not: what went to
-				the old address stays delivered, and resend is how you send it again.
+				A route delivers its events in the order they arrived, one at a time: the next
+				goes once the one before it was delivered or gave up. Switching a destination back
+				on delivers what arrived while it was off. Changing where a route points does not
+				resend: what went to the old address stays delivered, and resend is how you send
+				it again.
 			</p>
 			if len(routes) == 0 {
 				<p class="muted">No route. Nothing is delivered until a provider has one.</p>
@@ -717,7 +734,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 												<label><input type="checkbox" name="enabled" value="1"/> enabled</label>
 											}
 											<button>save</button>
-											<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+											@routeDeliveries(route)
 											if route.Deliveries > 0 && may(ctx, authz.EventsReplay) {
 												<button hx-post={ "/routes/" + route.ID.String() + "/resend" }
 														hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
@@ -735,7 +752,7 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 										if !route.Enabled {
 											<span class="pill">disabled</span>
 										}
-										<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
+										@routeDeliveries(route)
 									}
 								</td>
 							</tr>
@@ -748,11 +765,12 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 			<section>
 				<h2>Add a route</h2>
 				<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
-						hx-confirm="Every event already recorded for this provider will be delivered to this destination. Continue?">
+						hx-on::confirm={ confirmBeforeDeliveringRecorded("Every event already recorded for this provider will be delivered to this destination. Continue?") }>
 					<input type="text" name="provider" placeholder="provider" required/>
 					<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
 					<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
 					@transportChoice(transports)
+					@alreadyRecordedChoice("deliver what was recorded")
 					<button>create route</button>
 				</form>
 			</section>
@@ -829,6 +847,17 @@ func prettyJSON(body []byte) string {
 		return string(body)
 	}
 	return out.String()
+}
+
+// Asked only when the past is chosen: that is the choice that can send
+// thousands of requests to a destination that did not expect them.
+func confirmBeforeDeliveringRecorded(question string) templ.ComponentScript {
+	quoted, _ := json.Marshal(question)
+	// templ writes a handler into the attribute as it is given, so it arrives
+	// escaped for HTML and the browser undoes that before running it.
+	return templ.ComponentScript{Call: html.EscapeString(fmt.Sprintf(
+		"if (this.elements.already_recorded.value === %q && !confirm(%s)) event.preventDefault()",
+		console.DeliverAlreadyRecorded, quoted))}
 }
 
 // counted keeps the plural honest, because "1 attempts" reads like a bug.

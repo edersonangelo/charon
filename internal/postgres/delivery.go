@@ -22,7 +22,7 @@ import (
 
 var (
 	ErrNoDestination = errors.New("no destination with that name")
-	ErrAlreadyRouted = errors.New("this provider already delivers to that url")
+	ErrAlreadyRouted = errors.New("this provider already delivers to that destination")
 )
 
 // Creates the delivery rows a recorded event is owed, one per enabled route
@@ -82,6 +82,10 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 
 	q := s.q.WithTx(tx)
 
+	if err := q.HoldRoutesForPlanning(ctx, s.tenantOf(ctx)); err != nil {
+		return 0, 0, fmt.Errorf("waiting for routes being changed: %w", err)
+	}
+
 	events, err := q.ClaimUnplannedEvents(ctx, int32(batch)) //nolint:gosec // batch is small
 	if err != nil {
 		return 0, 0, fmt.Errorf("claiming unplanned events: %w", err)
@@ -98,9 +102,9 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 			continue
 		}
 
-		destinations, destErr := q.EnabledDestinationsForProvider(ctx,
-			db.EnabledDestinationsForProviderParams{
-				TenantID: event.TenantID, Provider: event.Provider,
+		destinations, destErr := q.EnabledDestinationsForEvent(ctx,
+			db.EnabledDestinationsForEventParams{
+				TenantID: event.TenantID, Provider: event.Provider, EventID: event.ID,
 			})
 		if destErr != nil {
 			return 0, 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)
@@ -118,6 +122,7 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 				TenantID:      event.TenantID,
 				EventID:       event.ID,
 				DestinationID: destinationID,
+				EventProvider: event.Provider,
 			}); createErr != nil {
 				return 0, 0, fmt.Errorf("creating a delivery for event %s: %w", event.ID, createErr)
 			}
@@ -289,7 +294,12 @@ func DeliverableURL(raw string) (string, error) {
 
 func (s *Store) AddRoute(
 	ctx context.Context, provider, destination, url, transport string,
+	alreadyRecorded console.AlreadyRecorded,
 ) error {
+	alreadyRecorded, err := console.ParseAlreadyRecorded(string(alreadyRecorded))
+	if err != nil {
+		return err
+	}
 	if transport == "" {
 		transport = outbound.HTTP
 	}
@@ -311,6 +321,10 @@ func (s *Store) AddRoute(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.q.WithTx(tx)
+
+	if err := q.HoldRoutesForChange(ctx, s.tenantOf(ctx)); err != nil {
+		return fmt.Errorf("waiting for planning to finish: %w", err)
+	}
 
 	existing, err := q.DestinationByName(ctx, db.DestinationByNameParams{
 		TenantID: s.tenantOf(ctx), Name: destination,
@@ -338,17 +352,27 @@ func (s *Store) AddRoute(
 		return ErrAlreadyRouted
 	}
 
-	if err := q.CreateRoute(ctx, db.CreateRouteParams{
+	deliverRecorded := alreadyRecorded == console.DeliverAlreadyRecorded
+	_, err = q.CreateRoute(ctx, db.CreateRouteParams{
 		TenantID: s.tenantOf(ctx), Provider: provider, DestinationID: existing.ID,
-	}); err != nil {
+		DeliverRecorded: deliverRecorded,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAlreadyRouted
+	}
+	if err != nil {
 		return fmt.Errorf("creating the route: %w", err)
 	}
 
-	// Routes are evaluated once per event. Without unplanning, a route added
-	// after an event was planned would never reach it, and there would be no
-	// delivery row to resend either.
-	if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: provider, TenantID: s.tenantOf(ctx)}); err != nil {
-		return fmt.Errorf("reopening planning for %q: %w", provider, err)
+	// Routes are evaluated once per event, so what was planned before this
+	// route existed carries no delivery for it.
+	if deliverRecorded {
+		if _, err := q.DeliverWhatWasRecordedTo(ctx, db.DeliverWhatWasRecordedToParams{
+			TenantID: s.tenantOf(ctx), DestinationID: existing.ID,
+			Provider: pgtype.Text{String: provider, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("delivering what %q already sent: %w", provider, err)
+		}
 	}
 
 	// A new route can make events that were waiting for one deliverable, and

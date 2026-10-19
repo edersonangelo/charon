@@ -18,11 +18,21 @@ type Querier interface {
 	// waiting, keeping its attempts, instead of being spent against somewhere that
 	// was deliberately taken out of service — which would leave a delivery dead by
 	// the time it came back.
+	//
+	// Only the first waiting delivery of a route is a candidate, so one in flight
+	// or waiting out a retry holds the ones behind it. What decides it is checked
+	// again on the locked row, which is how two dispatchers never take two from
+	// one route.
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered, unless somebody
 	// overruled that deliberately and said why. One that was never checked is
 	// delivered: a provider with no verifier configured behaves as before.
-	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
+	//
+	// Only what can be settled now is read: what a route wants, from where that
+	// route starts, and what was refused. An event no route wants, or one a route
+	// chose to skip, is never read again, so however many of them pile up they
+	// cost planning nothing.
+	ClaimUnplannedEvents(ctx context.Context, batchSize int32) ([]ClaimUnplannedEventsRow, error)
 	ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error
 	ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
 	ClearSystemAdminByEmail(ctx context.Context, email string) (int64, error)
@@ -38,7 +48,9 @@ type Querier interface {
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
 	CreatePanelSession(ctx context.Context, arg CreatePanelSessionParams) error
 	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error)
-	CreateRoute(ctx context.Context, arg CreateRouteParams) error
+	// An event's identifier carries its instant to the millisecond, so a route
+	// starts on a millisecond too: what is recorded in the same one counts as after.
+	CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error)
 	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
 	CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
@@ -49,6 +61,12 @@ type Querier interface {
 	DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, error)
 	DeleteRoute(ctx context.Context, arg DeleteRouteParams) error
 	DeleteTenant(ctx context.Context, slug string) error
+	// What a destination is owed from before it could be reached: events already
+	// planned without it, because its route did not exist yet or it was switched
+	// off. They are given their deliveries here rather than planned again, because
+	// planning them again would hold every other route of the provider until the
+	// whole history had been through planning once more.
+	DeliverWhatWasRecordedTo(ctx context.Context, arg DeliverWhatWasRecordedToParams) (int64, error)
 	DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error)
 	DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
@@ -57,7 +75,7 @@ type Querier interface {
 	DestinationsWithoutSigning(ctx context.Context, tenantID uuid.UUID) ([]DestinationsWithoutSigningRow, error)
 	DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error)
 	DistinctProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error)
-	EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error)
+	EnabledDestinationsForEvent(ctx context.Context, arg EnabledDestinationsForEventParams) ([]uuid.UUID, error)
 	EventDeliveries(ctx context.Context, arg EventDeliveriesParams) ([]EventDeliveriesRow, error)
 	EventDetail(ctx context.Context, arg EventDetailParams) (EventDetailRow, error)
 	// Every number a scrape reports, one tenant at a time. A scrape covers the
@@ -74,6 +92,20 @@ type Querier interface {
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
+	// An event's identifier is made when it is inserted and becomes visible when
+	// its transaction commits. Two of the same provider recorded side by side could
+	// commit in the other order, and the later identifier be seen, planned and
+	// delivered before the earlier one existed. Recording one provider's events one
+	// at a time keeps the order they become visible in the order of their
+	// identifiers, which is the order they are delivered in.
+	HoldProviderForRecording(ctx context.Context, arg HoldProviderForRecordingParams) error
+	HoldRoutesForChange(ctx context.Context, tenantID uuid.UUID) error
+	// Planning reads which routes an event goes to and gives it its deliveries in
+	// one transaction, and a route added or switched back on gives deliveries to
+	// what was planned before it. Each waits for the other, or an event planned
+	// while a route appeared would be given to neither. Planning shares the hold:
+	// dispatchers running side by side do not wait for each other.
+	HoldRoutesForPlanning(ctx context.Context, tenantID uuid.UUID) error
 	// A value that names only a tenant leaves the role to whoever decides it here,
 	// so arriving again does not undo it.
 	JoinFromProvider(ctx context.Context, arg JoinFromProviderParams) error
@@ -94,6 +126,9 @@ type Querier interface {
 	MarkSignatureAndReopen(ctx context.Context, arg MarkSignatureAndReopenParams) error
 	MembershipIn(ctx context.Context, arg MembershipInParams) (string, error)
 	Memberships(ctx context.Context, userID uuid.UUID) ([]MembershipsRow, error)
+	// Only the first waiting delivery of a route can go, so only it says when there
+	// is work. Counting the ones behind it would wake the dispatcher over and over
+	// while the first waits out a retry.
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
 	NotifyPanel(ctx context.Context) error
 	NotifyProviders(ctx context.Context) error
@@ -181,7 +216,6 @@ type Querier interface {
 	// once rather than at the end of a backoff earned by a typo.
 	TryAgainAtTheNewAddress(ctx context.Context, arg TryAgainAtTheNewAddressParams) (int64, error)
 	UnplanEvent(ctx context.Context, arg UnplanEventParams) error
-	UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error)
 	UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error)
 	UnverifiedEvents(ctx context.Context, arg UnverifiedEventsParams) ([]UnverifiedEventsRow, error)
 	UpdateDestination(ctx context.Context, arg UpdateDestinationParams) error

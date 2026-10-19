@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -254,15 +255,39 @@ type Attempt struct {
 }
 
 type RouteRow struct {
-	ID            uuid.UUID
-	Provider      string
-	DestinationID uuid.UUID
-	Destination   string
-	Transport     string
-	URL           string
-	Enabled       bool
-	Deliveries    int64
-	Signing       []SigningSecret
+	ID                 uuid.UUID
+	Provider           string
+	DestinationID      uuid.UUID
+	Destination        string
+	Transport          string
+	URL                string
+	Enabled            bool
+	Deliveries         int64
+	Signing            []SigningSecret
+	AlreadyRecorded    AlreadyRecorded
+	EventsRecordedFrom time.Time
+}
+
+// AlreadyRecorded is what a new route does with the events its provider sent
+// before the route existed. Somebody has to choose: delivering them can be
+// thousands of requests to a destination that did not expect them.
+type AlreadyRecorded string
+
+const (
+	DeliverAlreadyRecorded AlreadyRecorded = "deliver"
+	SkipAlreadyRecorded    AlreadyRecorded = "skip"
+)
+
+var ErrAlreadyRecordedNotChosen = errors.New(
+	`a new route needs to be told whether to deliver what was already recorded: "deliver" or "skip"`)
+
+func ParseAlreadyRecorded(raw string) (AlreadyRecorded, error) {
+	switch chosen := AlreadyRecorded(strings.TrimSpace(raw)); chosen {
+	case DeliverAlreadyRecorded, SkipAlreadyRecorded:
+		return chosen, nil
+	default:
+		return "", ErrAlreadyRecordedNotChosen
+	}
 }
 
 // One secret a destination signs with: where it is kept, when it was added,

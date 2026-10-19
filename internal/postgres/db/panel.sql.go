@@ -310,7 +310,9 @@ func (q *Queries) DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) (
 
 const detailedRoutes = `-- name: DetailedRoutes :many
 select r.id, r.provider, d.id as destination_id, d.name, d.url, d.transport, d.enabled,
-       (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries
+       (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries,
+       (r.events_recorded_from = '-infinity')::boolean as delivers_recorded,
+       greatest(r.events_recorded_from, r.created_at)::timestamptz as events_recorded_from
 from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1
@@ -318,14 +320,16 @@ order by r.provider, d.name
 `
 
 type DetailedRoutesRow struct {
-	ID            uuid.UUID
-	Provider      string
-	DestinationID uuid.UUID
-	Name          string
-	Url           string
-	Transport     string
-	Enabled       bool
-	Deliveries    int64
+	ID                 uuid.UUID
+	Provider           string
+	DestinationID      uuid.UUID
+	Name               string
+	Url                string
+	Transport          string
+	Enabled            bool
+	Deliveries         int64
+	DeliversRecorded   bool
+	EventsRecordedFrom time.Time
 }
 
 func (q *Queries) DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error) {
@@ -346,6 +350,8 @@ func (q *Queries) DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]Det
 			&i.Transport,
 			&i.Enabled,
 			&i.Deliveries,
+			&i.DeliversRecorded,
+			&i.EventsRecordedFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -1755,23 +1761,6 @@ type UnplanEventParams struct {
 func (q *Queries) UnplanEvent(ctx context.Context, arg UnplanEventParams) error {
 	_, err := q.db.Exec(ctx, unplanEvent, arg.ID, arg.TenantID)
 	return err
-}
-
-const unplanProvider = `-- name: UnplanProvider :execrows
-update inbound_event set planned_at = null where provider = $1 and tenant_id = $2
-`
-
-type UnplanProviderParams struct {
-	Provider string
-	TenantID uuid.UUID
-}
-
-func (q *Queries) UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error) {
-	result, err := q.db.Exec(ctx, unplanProvider, arg.Provider, arg.TenantID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const unroutedProviders = `-- name: UnroutedProviders :many

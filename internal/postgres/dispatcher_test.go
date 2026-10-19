@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
@@ -15,7 +16,7 @@ func waiting(ctx context.Context, t *testing.T, store *postgres.Store, provider 
 	t.Helper()
 
 	if err := store.AddRoute(ctx, provider, provider+"-sink",
-		"https://sink.example/"+provider, "http"); err != nil {
+		"https://sink.example/"+provider, "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing %s: %v", provider, err)
 	}
 	if _, err := store.Record(ctx, inbound.Request{
@@ -161,7 +162,7 @@ func TestABusyTenantDoesNotStarveTheOthers(t *testing.T) {
 
 	busyCtx := authz.WithTenant(ctx, busy.ID)
 	if err := store.AddRoute(busyCtx, "loud", "loud-sink",
-		"https://sink.example/loud", "http"); err != nil {
+		"https://sink.example/loud", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	// More than every round of the loop below can consume, so the busy tenant

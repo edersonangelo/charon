@@ -108,7 +108,7 @@ func setupOn(
 	server := httptest.NewServer(target.handler())
 	t.Cleanup(server.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "test", server.URL, transport); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "test", server.URL, transport, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestAnEventWaitsForItsRouteAndIsDeliveredWhenItArrives(t *testing.T) {
 	server := httptest.NewServer(target.handler())
 	t.Cleanup(server.Close)
 
-	if err := store.AddRoute(ctx, "arrives-first", "late", server.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "arrives-first", "late", server.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 

@@ -128,12 +128,11 @@ only the status decides whether a delivery is done.
 ## route
 
 Where a provider's events are delivered. Nothing is delivered until a provider
-has a route, and an event recorded before the route existed is picked up the
-moment it appears.
+has a route.
 
 ```sh
-charon route add -provider stripe -url https://api.internal/webhooks/stripe
-charon route add -provider stripe -url https://audit.internal/stripe -destination audit
+charon route add -provider stripe -url https://api.internal/webhooks/stripe -already-recorded deliver
+charon route add -provider stripe -url https://audit.internal/stripe -destination audit -already-recorded skip
 charon route list
 ```
 
@@ -141,15 +140,21 @@ charon route list
 |---|---|---|
 | `-provider` | — | the provider whose events are routed |
 | `-url` | — | where they are delivered |
+| `-already-recorded` | — | `deliver` or `skip`: what happens to the events the provider sent before the route existed |
 | `-destination` | the provider's name | a name for this destination |
 | `-transport` | `http` | kind of destination |
+| `-tenant` | `default` | which tenant this route belongs to |
+
+`-already-recorded` has no default. `deliver` sends every event the provider has
+already sent, which can be thousands of requests to a destination that did not
+expect them. `skip` sends only what arrives from now on. The panel asks the same
+question.
 
 An address is refused here as it is in the panel: it has to parse, have a host,
 and be `http` or `https`. Nothing is said about the path — a trailing slash is a
 real endpoint, and what belongs after the host is the receiver's business. A
 destination of another kind of transport is addressed however that transport
 addresses things, and this rule leaves it alone.
-| `-tenant` | `default` | which tenant this route belongs to |
 
 Correcting a destination's address tries what is waiting for it at once, with
 its attempts back: what failed against an address that was wrong did not fail

@@ -1,3 +1,12 @@
+-- An event's identifier is made when it is inserted and becomes visible when
+-- its transaction commits. Two of the same provider recorded side by side could
+-- commit in the other order, and the later identifier be seen, planned and
+-- delivered before the earlier one existed. Recording one provider's events one
+-- at a time keeps the order they become visible in the order of their
+-- identifiers, which is the order they are delivered in.
+-- name: HoldProviderForRecording :exec
+select pg_advisory_xact_lock(1, hashtext(sqlc.arg(tenant_id)::uuid::text || '/' || sqlc.arg(provider)::text));
+
 -- name: CreateInboundEvent :one
 insert into inbound_event (
     tenant_id, provider, path, received_at, body_size, signature

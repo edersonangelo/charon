@@ -6,10 +6,15 @@ returning *;
 -- name: DestinationByName :one
 select * from destination where tenant_id = $1 and name = $2;
 
--- name: CreateRoute :exec
-insert into route (tenant_id, provider, destination_id)
-values ($1, $2, $3)
-on conflict (tenant_id, provider, destination_id) do nothing;
+-- An event's identifier carries its instant to the millisecond, so a route
+-- starts on a millisecond too: what is recorded in the same one counts as after.
+-- name: CreateRoute :one
+insert into route (tenant_id, provider, destination_id, events_recorded_from)
+values ($1, $2, $3,
+        case when sqlc.arg(deliver_recorded)::boolean then '-infinity'::timestamptz
+             else date_trunc('milliseconds', now()) end)
+on conflict (tenant_id, provider, destination_id) do nothing
+returning id;
 
 -- name: ListRoutes :many
 select r.provider, d.name, d.url, d.transport, d.enabled,
@@ -22,24 +27,82 @@ order by r.provider, d.name;
 -- A signature that was checked and failed is never delivered, unless somebody
 -- overruled that deliberately and said why. One that was never checked is
 -- delivered: a provider with no verifier configured behaves as before.
+--
+-- Only what can be settled now is read: what a route wants, from where that
+-- route starts, and what was refused. An event no route wants, or one a route
+-- chose to skip, is never read again, so however many of them pile up they
+-- cost planning nothing.
 -- name: ClaimUnplannedEvents :many
-select id, tenant_id, provider, signature,
-       (override_id is not null)::boolean as overridden
-from inbound_event
-where planned_at is null
-order by received_at
-limit $1
-for update skip locked;
+select e.id, e.tenant_id, e.provider, e.signature,
+       (e.override_id is not null)::boolean as overridden
+from inbound_event e
+where e.planned_at is null
+  and e.id in (
+      (select refused.id
+       from inbound_event refused
+       where refused.tenant_id = current_tenant() and refused.planned_at is null
+         and refused.signature in ('invalid', 'missing') and refused.override_id is null
+       order by refused.id
+       limit sqlc.arg(batch_size))
+      union
+      (select wanted.id
+       from route r
+       join destination d on d.id = r.destination_id and d.enabled
+       cross join lateral (
+           select unplanned.id
+           from inbound_event unplanned
+           where unplanned.tenant_id = current_tenant() and unplanned.provider = r.provider
+             and unplanned.planned_at is null
+             and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+           order by unplanned.id
+           limit sqlc.arg(batch_size)
+       ) wanted)
+  )
+order by e.id
+limit sqlc.arg(batch_size)
+for update of e skip locked;
 
--- name: EnabledDestinationsForProvider :many
+-- name: EnabledDestinationsForEvent :many
 select d.id from route r
 join destination d on d.id = r.destination_id
-where r.tenant_id = $1 and r.provider = $2 and d.enabled;
+where r.tenant_id = sqlc.arg(tenant_id)
+  and r.provider = sqlc.arg(provider)
+  and sqlc.arg(event_id)::uuid >= first_id_recorded_at(r.events_recorded_from)
+  and d.enabled;
 
 -- name: CreateDelivery :exec
-insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
-values ($1, $2, $3, 'pending', now())
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+values ($1, $2, $3, $4, 'pending', now())
 on conflict (event_id, destination_id) do nothing;
+
+-- What a destination is owed from before it could be reached: events already
+-- planned without it, because its route did not exist yet or it was switched
+-- off. They are given their deliveries here rather than planned again, because
+-- planning them again would hold every other route of the provider until the
+-- whole history had been through planning once more.
+-- name: DeliverWhatWasRecordedTo :execrows
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+select e.tenant_id, e.id, r.destination_id, e.provider, 'pending', now()
+from route r
+join inbound_event e on e.tenant_id = r.tenant_id and e.provider = r.provider
+where r.tenant_id = sqlc.arg(tenant_id)
+  and r.destination_id = sqlc.arg(destination_id)
+  and (sqlc.narg(provider)::varchar is null or r.provider = sqlc.narg(provider)::varchar)
+  and e.planned_at is not null
+  and (e.signature in ('unchecked', 'valid') or e.override_id is not null)
+  and e.id >= first_id_recorded_at(r.events_recorded_from)
+on conflict (event_id, destination_id) do nothing;
+
+-- Planning reads which routes an event goes to and gives it its deliveries in
+-- one transaction, and a route added or switched back on gives deliveries to
+-- what was planned before it. Each waits for the other, or an event planned
+-- while a route appeared would be given to neither. Planning shares the hold:
+-- dispatchers running side by side do not wait for each other.
+-- name: HoldRoutesForPlanning :exec
+select pg_advisory_xact_lock_shared(2, hashtext(sqlc.arg(tenant_id)::uuid::text));
+
+-- name: HoldRoutesForChange :exec
+select pg_advisory_xact_lock(2, hashtext(sqlc.arg(tenant_id)::uuid::text));
 
 -- name: MarkEventPlanned :exec
 update inbound_event set planned_at = now() where id = $1;
@@ -48,13 +111,20 @@ update inbound_event set planned_at = now() where id = $1;
 -- waiting, keeping its attempts, instead of being spent against somewhere that
 -- was deliberately taken out of service — which would leave a delivery dead by
 -- the time it came back.
+--
+-- Only the first waiting delivery of a route is a candidate, so one in flight
+-- or waiting out a retry holds the ones behind it. What decides it is checked
+-- again on the locked row, which is how two dispatchers never take two from
+-- one route.
 -- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => sqlc.arg(lease_seconds)::float)
 where id in (
-    select dl.id from delivery dl
+    select dl.id
+    from delivery dl
     join destination d on d.id = dl.destination_id
-    where dl.state = 'pending'
+    where dl.id = any (array(select first_waiting_of_each_route()))
+      and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
       and d.enabled
@@ -99,19 +169,40 @@ from delivery where state = 'pending';
 -- name: NotifyWork :exec
 select pg_notify('charon_work', '');
 
+-- Only the first waiting delivery of a route can go, so only it says when there
+-- is work. Counting the ones behind it would wake the dispatcher over and over
+-- while the first waits out a retry.
 -- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(dl.next_attempt_at) from delivery dl
-         join destination d on d.id = dl.destination_id
-         where dl.state = 'pending' and d.enabled),
+        (select min(dl.next_attempt_at)
+         from delivery dl
+         join destination d on d.id = dl.destination_id and d.enabled
+         where dl.id = any (array(select first_waiting_of_each_route()))),
+        -- A route in flight holds what is behind it until the attempt is
+        -- recorded, or until its lease runs out because the worker died.
+        (select min(flying.leased_until)
+         from delivery flying
+         join destination d on d.id = flying.destination_id and d.enabled
+         where flying.tenant_id = current_tenant() and flying.state = 'pending'
+           and flying.leased_until is not null and flying.leased_until > now()),
         (select case when exists (
-                    select 1 from inbound_event e
-                    join route r on r.provider = e.provider
+                    select 1 from inbound_event refused
+                    where refused.tenant_id = current_tenant() and refused.planned_at is null
+                      and refused.signature in ('invalid', 'missing') and refused.override_id is null
+                ) or exists (
+                    select 1
+                    from route r
                     join destination d on d.id = r.destination_id and d.enabled
-                    where e.planned_at is null
-                      and (e.signature in ('unchecked', 'valid')
-                           or e.override_id is not null)
+                    cross join lateral (
+                        select 1
+                        from inbound_event unplanned
+                        where unplanned.tenant_id = current_tenant()
+                          and unplanned.provider = r.provider
+                          and unplanned.planned_at is null
+                          and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+                        limit 1
+                    ) wanted
                 ) then now() end)
     ) as at
 )

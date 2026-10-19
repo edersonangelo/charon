@@ -546,16 +546,22 @@ func (s *Store) DetailedRoutes(ctx context.Context) ([]console.RouteRow, error) 
 		if signErr != nil {
 			return nil, signErr
 		}
+		alreadyRecorded := console.SkipAlreadyRecorded
+		if row.DeliversRecorded {
+			alreadyRecorded = console.DeliverAlreadyRecorded
+		}
 		routes = append(routes, console.RouteRow{
-			ID:            row.ID,
-			Provider:      row.Provider,
-			DestinationID: row.DestinationID,
-			Destination:   row.Name,
-			Transport:     row.Transport,
-			URL:           row.Url,
-			Enabled:       row.Enabled,
-			Deliveries:    row.Deliveries,
-			Signing:       signing,
+			ID:                 row.ID,
+			Provider:           row.Provider,
+			DestinationID:      row.DestinationID,
+			Destination:        row.Name,
+			Transport:          row.Transport,
+			URL:                row.Url,
+			Enabled:            row.Enabled,
+			Deliveries:         row.Deliveries,
+			Signing:            signing,
+			AlreadyRecorded:    alreadyRecorded,
+			EventsRecordedFrom: row.EventsRecordedFrom,
 		})
 	}
 	return routes, nil
@@ -577,6 +583,10 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.q.WithTx(tx)
+
+	if err := q.HoldRoutesForChange(ctx, s.tenantOf(ctx)); err != nil {
+		return fmt.Errorf("waiting for planning to finish: %w", err)
+	}
 
 	if err := q.UpdateDestination(ctx, db.UpdateDestinationParams{
 		ID: route.DestinationID, TenantID: s.tenantOf(ctx), Url: url, Enabled: enabled,
@@ -605,8 +615,10 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 	// A destination coming back on has the same gap a new route has: events
 	// planned while it was off carry no delivery for it.
 	if enabled && !route.Enabled {
-		if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: route.Provider, TenantID: s.tenantOf(ctx)}); err != nil {
-			return fmt.Errorf("reopening planning for %q: %w", route.Provider, err)
+		if _, err := q.DeliverWhatWasRecordedTo(ctx, db.DeliverWhatWasRecordedToParams{
+			TenantID: s.tenantOf(ctx), DestinationID: route.DestinationID,
+		}); err != nil {
+			return fmt.Errorf("delivering what %q missed while it was off: %w", route.Name, err)
 		}
 	}
 

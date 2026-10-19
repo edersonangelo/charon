@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/edersonangelo/charon/internal/console"
 )
 
 func TestRun(t *testing.T) {
@@ -46,6 +48,12 @@ func TestRun(t *testing.T) {
 			name:    "migrate without a database url is an error",
 			args:    []string{"migrate"},
 			wantErr: errMissingDatabaseURL,
+		},
+		{
+			name: "a route without a choice about what was already recorded is an error",
+			args: []string{"route", "add", "-database-url", "postgres://nowhere/charon",
+				"-provider", "stripe", "-url", "https://service.internal/stripe"},
+			wantErr: console.ErrAlreadyRecordedNotChosen,
 		},
 	}
 

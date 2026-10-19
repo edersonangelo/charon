@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
@@ -131,14 +132,14 @@ func TestWhatABuildKnowsIsRecordedByStarting(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "stripe", "pigeons", "https://roof.example", "carrier-pigeon"); err == nil {
+	if err := store.AddRoute(ctx, "stripe", "pigeons", "https://roof.example", "carrier-pigeon", console.DeliverAlreadyRecorded); err == nil {
 		t.Fatal("a destination was created on a transport nothing registered")
 	}
 
 	if err := store.Register(ctx, postgres.Kinds{Transports: []string{"carrier-pigeon"}}); err != nil {
 		t.Fatalf("registering: %v", err)
 	}
-	if err := store.AddRoute(ctx, "stripe", "pigeons", "https://roof.example", "carrier-pigeon"); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "pigeons", "https://roof.example", "carrier-pigeon", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing over a registered transport: %v", err)
 	}
 

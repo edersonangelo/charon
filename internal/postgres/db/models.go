@@ -39,6 +39,7 @@ type Delivery struct {
 	ReplayCount   int32
 	ReplayedAt    pgtype.Timestamptz
 	TenantID      uuid.UUID
+	EventProvider string
 }
 
 type DeliveryAttempt struct {
@@ -154,11 +155,12 @@ type RoleGrant struct {
 }
 
 type Route struct {
-	ID            uuid.UUID
-	Provider      string
-	DestinationID uuid.UUID
-	CreatedAt     time.Time
-	TenantID      uuid.UUID
+	ID                 uuid.UUID
+	Provider           string
+	DestinationID      uuid.UUID
+	CreatedAt          time.Time
+	TenantID           uuid.UUID
+	EventsRecordedFrom time.Time
 }
 
 type SchemaMigration struct {

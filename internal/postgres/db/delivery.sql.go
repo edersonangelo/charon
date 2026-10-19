@@ -17,9 +17,11 @@ const claimDeliveries = `-- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => $1::float)
 where id in (
-    select dl.id from delivery dl
+    select dl.id
+    from delivery dl
     join destination d on d.id = dl.destination_id
-    where dl.state = 'pending'
+    where dl.id = any (array(select first_waiting_of_each_route()))
+      and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
       and d.enabled
@@ -47,6 +49,11 @@ type ClaimDeliveriesRow struct {
 // waiting, keeping its attempts, instead of being spent against somewhere that
 // was deliberately taken out of service — which would leave a delivery dead by
 // the time it came back.
+//
+// Only the first waiting delivery of a route is a candidate, so one in flight
+// or waiting out a retry holds the ones behind it. What decides it is checked
+// again on the locked row, which is how two dispatchers never take two from
+// one route.
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, claimDeliveries, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -74,13 +81,34 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 }
 
 const claimUnplannedEvents = `-- name: ClaimUnplannedEvents :many
-select id, tenant_id, provider, signature,
-       (override_id is not null)::boolean as overridden
-from inbound_event
-where planned_at is null
-order by received_at
+select e.id, e.tenant_id, e.provider, e.signature,
+       (e.override_id is not null)::boolean as overridden
+from inbound_event e
+where e.planned_at is null
+  and e.id in (
+      (select refused.id
+       from inbound_event refused
+       where refused.tenant_id = current_tenant() and refused.planned_at is null
+         and refused.signature in ('invalid', 'missing') and refused.override_id is null
+       order by refused.id
+       limit $1)
+      union
+      (select wanted.id
+       from route r
+       join destination d on d.id = r.destination_id and d.enabled
+       cross join lateral (
+           select unplanned.id
+           from inbound_event unplanned
+           where unplanned.tenant_id = current_tenant() and unplanned.provider = r.provider
+             and unplanned.planned_at is null
+             and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+           order by unplanned.id
+           limit $1
+       ) wanted)
+  )
+order by e.id
 limit $1
-for update skip locked
+for update of e skip locked
 `
 
 type ClaimUnplannedEventsRow struct {
@@ -94,8 +122,13 @@ type ClaimUnplannedEventsRow struct {
 // A signature that was checked and failed is never delivered, unless somebody
 // overruled that deliberately and said why. One that was never checked is
 // delivered: a provider with no verifier configured behaves as before.
-func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error) {
-	rows, err := q.db.Query(ctx, claimUnplannedEvents, limit)
+//
+// Only what can be settled now is read: what a route wants, from where that
+// route starts, and what was refused. An event no route wants, or one a route
+// chose to skip, is never read again, so however many of them pile up they
+// cost planning nothing.
+func (q *Queries) ClaimUnplannedEvents(ctx context.Context, batchSize int32) ([]ClaimUnplannedEventsRow, error) {
+	rows, err := q.db.Query(ctx, claimUnplannedEvents, batchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +172,8 @@ func (q *Queries) CountEventsAwaitingRoute(ctx context.Context, tenantID uuid.UU
 }
 
 const createDelivery = `-- name: CreateDelivery :exec
-insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
-values ($1, $2, $3, 'pending', now())
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+values ($1, $2, $3, $4, 'pending', now())
 on conflict (event_id, destination_id) do nothing
 `
 
@@ -148,10 +181,16 @@ type CreateDeliveryParams struct {
 	TenantID      uuid.UUID
 	EventID       uuid.UUID
 	DestinationID uuid.UUID
+	EventProvider string
 }
 
 func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error {
-	_, err := q.db.Exec(ctx, createDelivery, arg.TenantID, arg.EventID, arg.DestinationID)
+	_, err := q.db.Exec(ctx, createDelivery,
+		arg.TenantID,
+		arg.EventID,
+		arg.DestinationID,
+		arg.EventProvider,
+	)
 	return err
 }
 
@@ -188,21 +227,67 @@ func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationPa
 	return i, err
 }
 
-const createRoute = `-- name: CreateRoute :exec
-insert into route (tenant_id, provider, destination_id)
-values ($1, $2, $3)
+const createRoute = `-- name: CreateRoute :one
+insert into route (tenant_id, provider, destination_id, events_recorded_from)
+values ($1, $2, $3,
+        case when $4::boolean then '-infinity'::timestamptz
+             else date_trunc('milliseconds', now()) end)
 on conflict (tenant_id, provider, destination_id) do nothing
+returning id
 `
 
 type CreateRouteParams struct {
-	TenantID      uuid.UUID
-	Provider      string
-	DestinationID uuid.UUID
+	TenantID        uuid.UUID
+	Provider        string
+	DestinationID   uuid.UUID
+	DeliverRecorded bool
 }
 
-func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) error {
-	_, err := q.db.Exec(ctx, createRoute, arg.TenantID, arg.Provider, arg.DestinationID)
-	return err
+// An event's identifier carries its instant to the millisecond, so a route
+// starts on a millisecond too: what is recorded in the same one counts as after.
+func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createRoute,
+		arg.TenantID,
+		arg.Provider,
+		arg.DestinationID,
+		arg.DeliverRecorded,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const deliverWhatWasRecordedTo = `-- name: DeliverWhatWasRecordedTo :execrows
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+select e.tenant_id, e.id, r.destination_id, e.provider, 'pending', now()
+from route r
+join inbound_event e on e.tenant_id = r.tenant_id and e.provider = r.provider
+where r.tenant_id = $1
+  and r.destination_id = $2
+  and ($3::varchar is null or r.provider = $3::varchar)
+  and e.planned_at is not null
+  and (e.signature in ('unchecked', 'valid') or e.override_id is not null)
+  and e.id >= first_id_recorded_at(r.events_recorded_from)
+on conflict (event_id, destination_id) do nothing
+`
+
+type DeliverWhatWasRecordedToParams struct {
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+	Provider      pgtype.Text
+}
+
+// What a destination is owed from before it could be reached: events already
+// planned without it, because its route did not exist yet or it was switched
+// off. They are given their deliveries here rather than planned again, because
+// planning them again would hold every other route of the provider until the
+// whole history had been through planning once more.
+func (q *Queries) DeliverWhatWasRecordedTo(ctx context.Context, arg DeliverWhatWasRecordedToParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deliverWhatWasRecordedTo, arg.TenantID, arg.DestinationID, arg.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deliveryTarget = `-- name: DeliveryTarget :one
@@ -261,19 +346,23 @@ func (q *Queries) DestinationByName(ctx context.Context, arg DestinationByNamePa
 	return i, err
 }
 
-const enabledDestinationsForProvider = `-- name: EnabledDestinationsForProvider :many
+const enabledDestinationsForEvent = `-- name: EnabledDestinationsForEvent :many
 select d.id from route r
 join destination d on d.id = r.destination_id
-where r.tenant_id = $1 and r.provider = $2 and d.enabled
+where r.tenant_id = $1
+  and r.provider = $2
+  and $3::uuid >= first_id_recorded_at(r.events_recorded_from)
+  and d.enabled
 `
 
-type EnabledDestinationsForProviderParams struct {
+type EnabledDestinationsForEventParams struct {
 	TenantID uuid.UUID
 	Provider string
+	EventID  uuid.UUID
 }
 
-func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, enabledDestinationsForProvider, arg.TenantID, arg.Provider)
+func (q *Queries) EnabledDestinationsForEvent(ctx context.Context, arg EnabledDestinationsForEventParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, enabledDestinationsForEvent, arg.TenantID, arg.Provider, arg.EventID)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +379,29 @@ func (q *Queries) EnabledDestinationsForProvider(ctx context.Context, arg Enable
 		return nil, err
 	}
 	return items, nil
+}
+
+const holdRoutesForChange = `-- name: HoldRoutesForChange :exec
+select pg_advisory_xact_lock(2, hashtext($1::uuid::text))
+`
+
+func (q *Queries) HoldRoutesForChange(ctx context.Context, tenantID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, holdRoutesForChange, tenantID)
+	return err
+}
+
+const holdRoutesForPlanning = `-- name: HoldRoutesForPlanning :exec
+select pg_advisory_xact_lock_shared(2, hashtext($1::uuid::text))
+`
+
+// Planning reads which routes an event goes to and gives it its deliveries in
+// one transaction, and a route added or switched back on gives deliveries to
+// what was planned before it. Each waits for the other, or an event planned
+// while a route appeared would be given to neither. Planning shares the hold:
+// dispatchers running side by side do not wait for each other.
+func (q *Queries) HoldRoutesForPlanning(ctx context.Context, tenantID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, holdRoutesForPlanning, tenantID)
+	return err
 }
 
 const listRoutes = `-- name: ListRoutes :many
@@ -400,16 +512,34 @@ func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) error {
 const nextWorkAt = `-- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(dl.next_attempt_at) from delivery dl
-         join destination d on d.id = dl.destination_id
-         where dl.state = 'pending' and d.enabled),
+        (select min(dl.next_attempt_at)
+         from delivery dl
+         join destination d on d.id = dl.destination_id and d.enabled
+         where dl.id = any (array(select first_waiting_of_each_route()))),
+        -- A route in flight holds what is behind it until the attempt is
+        -- recorded, or until its lease runs out because the worker died.
+        (select min(flying.leased_until)
+         from delivery flying
+         join destination d on d.id = flying.destination_id and d.enabled
+         where flying.tenant_id = current_tenant() and flying.state = 'pending'
+           and flying.leased_until is not null and flying.leased_until > now()),
         (select case when exists (
-                    select 1 from inbound_event e
-                    join route r on r.provider = e.provider
+                    select 1 from inbound_event refused
+                    where refused.tenant_id = current_tenant() and refused.planned_at is null
+                      and refused.signature in ('invalid', 'missing') and refused.override_id is null
+                ) or exists (
+                    select 1
+                    from route r
                     join destination d on d.id = r.destination_id and d.enabled
-                    where e.planned_at is null
-                      and (e.signature in ('unchecked', 'valid')
-                           or e.override_id is not null)
+                    cross join lateral (
+                        select 1
+                        from inbound_event unplanned
+                        where unplanned.tenant_id = current_tenant()
+                          and unplanned.provider = r.provider
+                          and unplanned.planned_at is null
+                          and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+                        limit 1
+                    ) wanted
                 ) then now() end)
     ) as at
 )
@@ -423,6 +553,9 @@ type NextWorkAtRow struct {
 	Found bool
 }
 
+// Only the first waiting delivery of a route can go, so only it says when there
+// is work. Counting the ones behind it would wake the dispatcher over and over
+// while the first waits out a retry.
 func (q *Queries) NextWorkAt(ctx context.Context) (NextWorkAtRow, error) {
 	row := q.db.QueryRow(ctx, nextWorkAt)
 	var i NextWorkAtRow

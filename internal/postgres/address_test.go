@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
@@ -31,7 +32,7 @@ func TestAnAddressNothingCanBeDeliveredToIsRefused(t *testing.T) {
 		"a scheme with no host": "http://",
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := store.AddRoute(ctx, "erp", "sink-"+name, address, "http")
+			err := store.AddRoute(ctx, "erp", "sink-"+name, address, "http", console.DeliverAlreadyRecorded)
 			if !errors.Is(err, postgres.ErrBadDestination) {
 				t.Errorf("%q was accepted (%v)", address, err)
 			}
@@ -59,7 +60,7 @@ func TestAnAddressThatIsFineIsTaken(t *testing.T) {
 		"https://host/in?tenant=acme",
 	} {
 		if err := store.AddRoute(ctx, "erp",
-			"sink-"+string(rune('a'+index)), address, "http"); err != nil {
+			"sink-"+string(rune('a'+index)), address, "http", console.DeliverAlreadyRecorded); err != nil {
 			t.Errorf("%q was refused: %v", address, err)
 		}
 	}
@@ -81,7 +82,7 @@ func TestAnotherTransportIsNotHeldToAnHttpAddress(t *testing.T) {
 		t.Fatalf("registering the transport: %v", err)
 	}
 	if err := store.AddRoute(ctx, "erp", "roof", "the one with the white tail",
-		"carrier-pigeon"); err != nil {
+		"carrier-pigeon", console.DeliverAlreadyRecorded); err != nil {
 		t.Errorf("a destination of another transport was held to an http address: %v", err)
 	}
 }

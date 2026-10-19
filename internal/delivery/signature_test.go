@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/outbound"
@@ -43,7 +44,7 @@ func TestOnlyASignatureThatPassedIsDelivered(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "service", target.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "service", target.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 

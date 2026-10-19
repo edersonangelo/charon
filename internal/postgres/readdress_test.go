@@ -14,7 +14,7 @@ import (
 func failingDelivery(ctx context.Context, t *testing.T, store *postgres.Store) (console.RouteRow, string) {
 	t.Helper()
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/wrong", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/wrong", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	if _, err := store.Record(ctx, inbound.Request{
