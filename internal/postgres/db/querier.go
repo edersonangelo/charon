@@ -90,6 +90,13 @@ type Querier interface {
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
+	// An event's identifier is made when it is inserted and becomes visible when
+	// its transaction commits. Two of the same provider recorded side by side could
+	// commit in the other order, and the later identifier be seen, planned and
+	// delivered before the earlier one existed. Recording one provider's events one
+	// at a time keeps the order they become visible in the order of their
+	// identifiers, which is the order they are delivered in.
+	HoldProviderForRecording(ctx context.Context, arg HoldProviderForRecordingParams) error
 	HoldRoutesForChange(ctx context.Context, tenantID uuid.UUID) error
 	// Planning reads which routes an event goes to and gives it its deliveries in
 	// one transaction, and a route added or switched back on gives deliveries to

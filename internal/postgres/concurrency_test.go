@@ -2,6 +2,8 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
+	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
@@ -222,5 +225,75 @@ func TestADestinationSwitchedOnWhileAnEventIsBeingPlannedStillReachesIt(t *testi
 
 	if urls := claimedURLs(ctx, t, store); !urls["https://sink.example/h"] {
 		t.Errorf("claimed %v: the destination switched on while the event was being planned never got it", urls)
+	}
+}
+
+// An identifier is handed out before its event commits, so without something
+// keeping them in step an event could become visible after a later one of the
+// same provider had already been seen, and be delivered behind it.
+func TestEventsOfAProviderBecomeVisibleInTheOrderOfTheirIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	store, dsn := open(t)
+	tenant, err := store.CreateTenant(context.Background(), "in-step", "Step")
+	if err != nil {
+		t.Fatalf("creating the tenant: %v", err)
+	}
+	ctx := inTenantWith(tenant.ID)
+	reader := insideTenant(ctx, t, dsn, tenant.ID)
+
+	var writers sync.WaitGroup
+	for range 8 {
+		writers.Go(func() {
+			for range 40 {
+				if _, err := store.Record(ctx, inbound.Request{
+					Provider:   "erp",
+					Path:       "/webhooks/erp",
+					ReceivedAt: time.Now().UTC(),
+					Headers:    map[string][]string{"Content-Type": {"application/json"}},
+					Body:       []byte(`{}`),
+				}); err != nil {
+					t.Errorf("recording: %v", err)
+					return
+				}
+			}
+		})
+	}
+	done := make(chan struct{})
+	go func() { writers.Wait(); close(done) }()
+
+	seen := map[uuid.UUID]bool{}
+	var highest uuid.UUID
+	var overtaken string
+	for finished := false; !finished && overtaken == ""; {
+		select {
+		case <-done:
+			finished = true
+		default:
+		}
+		rows, err := reader.Query(ctx, "select id from inbound_event where provider = 'erp' order by id")
+		if err != nil {
+			t.Fatalf("reading: %v", err)
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			t.Fatalf("reading: %v", err)
+		}
+		for _, id := range ids {
+			if seen[id] {
+				continue
+			}
+			if string(id[:]) < string(highest[:]) {
+				overtaken = fmt.Sprintf("event %s became visible after %s had already been seen", id, highest)
+			}
+			seen[id] = true
+		}
+		if len(ids) > 0 {
+			highest = ids[len(ids)-1]
+		}
+	}
+	<-done
+	if overtaken != "" {
+		t.Error(overtaken)
 	}
 }

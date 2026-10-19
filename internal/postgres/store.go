@@ -96,15 +96,6 @@ func (s *Store) Ping(ctx context.Context) error {
 // transaction has committed. Everything the caller tells the provider
 // afterwards depends on that.
 func (s *Store) Record(ctx context.Context, req inbound.Request) (uuid.UUID, error) {
-	if len(req.Body) > math.MaxInt32 {
-		return uuid.Nil, ErrBodyTooLarge
-	}
-
-	headers, err := json.Marshal(req.Headers)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("encoding the request headers: %w", err)
-	}
-
 	// The request says which tenant it arrived for, so the connection is
 	// scoped to it here: this is the one place where the tenant comes from
 	// what is being written rather than from who is asking.
@@ -121,6 +112,40 @@ func (s *Store) Record(ctx context.Context, req inbound.Request) (uuid.UUID, err
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.q.WithTx(tx)
+
+	id, err := recordIn(ctx, q, tenant, req)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	if err := q.NotifyWork(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("announcing the inbound record: %w", err)
+	}
+	if err := q.NotifyPanel(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("announcing the inbound record to the panel: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("committing the inbound record: %w", err)
+	}
+	return id, nil
+}
+
+func recordIn(ctx context.Context, q *db.Queries, tenant uuid.UUID, req inbound.Request) (uuid.UUID, error) {
+	if len(req.Body) > math.MaxInt32 {
+		return uuid.Nil, ErrBodyTooLarge
+	}
+
+	headers, err := json.Marshal(req.Headers)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("encoding the request headers: %w", err)
+	}
+
+	if err := q.HoldProviderForRecording(ctx, db.HoldProviderForRecordingParams{
+		TenantID: tenant, Provider: req.Provider,
+	}); err != nil {
+		return uuid.Nil, fmt.Errorf("waiting for %q's previous event to be recorded: %w", req.Provider, err)
+	}
 
 	id, err := q.CreateInboundEvent(ctx, db.CreateInboundEventParams{
 		TenantID:   tenant,
@@ -141,17 +166,6 @@ func (s *Store) Record(ctx context.Context, req inbound.Request) (uuid.UUID, err
 		Body:     req.Body,
 	}); err != nil {
 		return uuid.Nil, fmt.Errorf("recording the raw request: %w", err)
-	}
-
-	if err := q.NotifyWork(ctx); err != nil {
-		return uuid.Nil, fmt.Errorf("announcing the inbound record: %w", err)
-	}
-	if err := q.NotifyPanel(ctx); err != nil {
-		return uuid.Nil, fmt.Errorf("announcing the inbound record to the panel: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, fmt.Errorf("committing the inbound record: %w", err)
 	}
 	return id, nil
 }

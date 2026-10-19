@@ -127,6 +127,26 @@ func (q *Queries) GetInboundRequest(ctx context.Context, arg GetInboundRequestPa
 	return i, err
 }
 
+const holdProviderForRecording = `-- name: HoldProviderForRecording :exec
+select pg_advisory_xact_lock(1, hashtext($1::uuid::text || '/' || $2::text))
+`
+
+type HoldProviderForRecordingParams struct {
+	TenantID uuid.UUID
+	Provider string
+}
+
+// An event's identifier is made when it is inserted and becomes visible when
+// its transaction commits. Two of the same provider recorded side by side could
+// commit in the other order, and the later identifier be seen, planned and
+// delivered before the earlier one existed. Recording one provider's events one
+// at a time keeps the order they become visible in the order of their
+// identifiers, which is the order they are delivered in.
+func (q *Queries) HoldProviderForRecording(ctx context.Context, arg HoldProviderForRecordingParams) error {
+	_, err := q.db.Exec(ctx, holdProviderForRecording, arg.TenantID, arg.Provider)
+	return err
+}
+
 const listRecentInboundEvents = `-- name: ListRecentInboundEvents :many
 select id, provider, path, received_at, body_size, planned_at, signature, tenant_id, override_id from inbound_event order by received_at desc limit $1
 `
