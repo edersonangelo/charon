@@ -153,10 +153,17 @@ select pg_notify('charon_work', '');
 -- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(greatest(dl.next_attempt_at, coalesce(dl.leased_until, dl.next_attempt_at)))
+        (select min(dl.next_attempt_at)
          from delivery dl
          join destination d on d.id = dl.destination_id
          where dl.id in (select first_waiting_of_each_route()) and d.enabled),
+        -- A route in flight holds what is behind it until the attempt is
+        -- recorded, or until its lease runs out because the worker died.
+        (select min(flying.leased_until)
+         from delivery flying
+         join destination d on d.id = flying.destination_id and d.enabled
+         where flying.state = 'pending'
+           and flying.leased_until is not null and flying.leased_until > now()),
         (select case when exists (
                     select 1 from inbound_event e
                     where e.planned_at is null

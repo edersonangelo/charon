@@ -44,6 +44,13 @@ as $$
         limit 1
     ) head
     where not exists (
+        select 1 from delivery flying
+        where flying.state = 'pending'
+          and flying.destination_id = waiting.destination_id
+          and flying.event_provider = waiting.event_provider
+          and flying.leased_until is not null and flying.leased_until > now()
+    )
+    and not exists (
         select 1
         from inbound_event unplanned
         join route r on r.provider = unplanned.provider

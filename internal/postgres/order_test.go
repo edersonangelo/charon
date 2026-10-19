@@ -370,3 +370,44 @@ func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
 		t.Errorf("claimed %v: the route that skips the past delivered it", bodies(claimed))
 	}
 }
+
+func TestAReplayWaitsForWhatIsAlreadyInFlightOnItsRoute(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "replay-waits")
+
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+	start := time.Now().Add(-time.Minute)
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
+	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+
+	first, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("claiming the first: %v (%v)", err, bodies(first))
+	}
+	if err := store.MarkDelivered(ctx, first[0].Tenant, first[0].ID, 200); err != nil {
+		t.Fatalf("marking delivered: %v", err)
+	}
+	inFlight, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil || len(inFlight) != 1 {
+		t.Fatalf("claiming the second: %v (%v)", err, bodies(inFlight))
+	}
+
+	if replayed, err := store.ReplayDelivery(ctx, first[0].ID); err != nil || replayed != 1 {
+		t.Fatalf("replaying the first: %v (%d)", err, replayed)
+	}
+
+	alongside, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming during the flight: %v", err)
+	}
+	if len(alongside) != 0 {
+		t.Errorf("claimed %v while the second was still in flight on the same route", bodies(alongside))
+	}
+}

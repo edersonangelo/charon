@@ -19,12 +19,17 @@ create index delivery_first_waiting_idx
     on delivery (destination_id, event_provider, event_id)
     where state = 'pending';
 
+create index delivery_in_flight_idx
+    on delivery (destination_id, event_provider)
+    where state = 'pending' and leased_until is not null;
+
 create index inbound_event_unplanned_by_provider_idx
     on inbound_event (provider, id)
     where planned_at is null;
 
 -- The first delivery each route still owes, in the order its events were
--- recorded. A route is held while an earlier event of its provider is not
+-- recorded, for every route with nothing in flight: one in flight holds the
+-- route even when a replay has put an older one ahead of it. A route is held while an earlier event of its provider is not
 -- planned yet, because a dispatcher running beside this one may be about to
 -- plan it; one whose signature was refused will never be delivered and holds
 -- nothing. A dead delivery is no longer waiting, so it lets the next one go.
@@ -45,6 +50,13 @@ as $$
         limit 1
     ) head
     where not exists (
+        select 1 from delivery flying
+        where flying.state = 'pending'
+          and flying.destination_id = waiting.destination_id
+          and flying.event_provider = waiting.event_provider
+          and flying.leased_until is not null and flying.leased_until > now()
+    )
+    and not exists (
         select 1
         from inbound_event unplanned
         join route r on r.provider = unplanned.provider
