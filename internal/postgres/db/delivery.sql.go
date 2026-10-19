@@ -74,11 +74,17 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 }
 
 const claimUnplannedEvents = `-- name: ClaimUnplannedEvents :many
-select id, tenant_id, provider, signature,
-       (override_id is not null)::boolean as overridden
-from inbound_event
-where planned_at is null
-order by received_at
+select e.id, e.tenant_id, e.provider, e.signature,
+       (e.override_id is not null)::boolean as overridden
+from inbound_event e
+where e.planned_at is null
+  and ((e.signature in ('invalid', 'missing') and e.override_id is null)
+       or exists (
+           select 1 from route r
+           join destination d on d.id = r.destination_id and d.enabled
+           where r.provider = e.provider
+       ))
+order by e.received_at
 limit $1
 for update skip locked
 `
@@ -94,6 +100,9 @@ type ClaimUnplannedEventsRow struct {
 // A signature that was checked and failed is never delivered, unless somebody
 // overruled that deliberately and said why. One that was never checked is
 // delivered: a provider with no verifier configured behaves as before.
+//
+// An event no route wants is left out: taking it would spend the batch on it
+// every round, and a tenant with enough of them would never plan again.
 func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error) {
 	rows, err := q.db.Query(ctx, claimUnplannedEvents, limit)
 	if err != nil {

@@ -22,6 +22,9 @@ type Querier interface {
 	// A signature that was checked and failed is never delivered, unless somebody
 	// overruled that deliberately and said why. One that was never checked is
 	// delivered: a provider with no verifier configured behaves as before.
+	//
+	// An event no route wants is left out: taking it would spend the batch on it
+	// every round, and a tenant with enough of them would never plan again.
 	ClaimUnplannedEvents(ctx context.Context, limit int32) ([]ClaimUnplannedEventsRow, error)
 	ClearRoleGrants(ctx context.Context, roleID uuid.UUID) error
 	ClearSystemAdmin(ctx context.Context, id uuid.UUID) (int64, error)
