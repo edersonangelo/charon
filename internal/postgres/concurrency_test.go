@@ -297,3 +297,52 @@ func TestEventsOfAProviderBecomeVisibleInTheOrderOfTheirIdentifiers(t *testing.T
 		t.Error(overtaken)
 	}
 }
+
+// A test delivery is meant for the one destination it was sent to. Planning it
+// like any other event would send it to every route of the provider.
+func TestATestDeliveryReachesOnlyTheRouteItWasSentTo(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	tenant, err := store.CreateTenant(context.Background(), "test-only", "Test")
+	if err != nil {
+		t.Fatalf("creating the tenant: %v", err)
+	}
+	ctx := inTenantWith(tenant.ID)
+
+	for _, name := range []string{"tested", "bystander"} {
+		if err := store.AddRoute(ctx, "erp", name, "https://"+name+".example/h", "http",
+			console.DeliverAlreadyRecorded); err != nil {
+			t.Fatalf("routing to %s: %v", name, err)
+		}
+	}
+	tested := destinationOf(ctx, t, store, "tested")
+
+	stop := make(chan struct{})
+	planning := make(chan struct{})
+	go func() {
+		defer close(planning)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := store.Plan(ctx, 10); err != nil {
+				t.Errorf("planning: %v", err)
+				return
+			}
+		}
+	}()
+	for range 40 {
+		if _, err := store.SendTest(ctx, tested.ID); err != nil {
+			t.Fatalf("sending a test: %v", err)
+		}
+	}
+	close(stop)
+	<-planning
+
+	if bystander := destinationOf(ctx, t, store, "bystander"); bystander.Deliveries != 0 {
+		t.Errorf("the route that was not tested got %d test deliveries", bystander.Deliveries)
+	}
+}

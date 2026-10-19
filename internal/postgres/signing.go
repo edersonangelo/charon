@@ -203,7 +203,18 @@ func (s *Store) SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, err
 		return uuid.Nil, ErrNoRoute
 	}
 
-	event, err := s.Record(ctx, inbound.Request{
+	// Recorded and planned in one transaction: an event that was visible
+	// unplanned for a moment would be planned like any other, and sent to every
+	// route of the provider instead of the one being tested.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("beginning the test: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := s.q.WithTx(tx)
+
+	event, err := recordIn(ctx, q, s.tenantOf(ctx), inbound.Request{
 		Provider:   route.Provider,
 		Path:       "/webhooks/" + route.Provider + "/test",
 		ReceivedAt: time.Now().UTC(),
@@ -214,7 +225,7 @@ func (s *Store) SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, err
 		return uuid.Nil, err
 	}
 
-	if err := s.q.CreateDelivery(ctx, db.CreateDeliveryParams{
+	if err := q.CreateDelivery(ctx, db.CreateDeliveryParams{
 		TenantID:      s.tenantOf(ctx),
 		EventID:       event,
 		DestinationID: route.DestinationID,
@@ -222,10 +233,18 @@ func (s *Store) SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, err
 	}); err != nil {
 		return uuid.Nil, fmt.Errorf("planning the test delivery: %w", err)
 	}
-	if err := s.q.MarkEventPlanned(ctx, event); err != nil {
+	if err := q.MarkEventPlanned(ctx, event); err != nil {
 		return uuid.Nil, fmt.Errorf("marking the test event planned: %w", err)
 	}
+	if err := q.NotifyWork(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("announcing the test: %w", err)
+	}
+	if err := q.NotifyPanel(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("announcing the test to the panel: %w", err)
+	}
 
-	s.announceToPanel(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("committing the test: %w", err)
+	}
 	return event, nil
 }
