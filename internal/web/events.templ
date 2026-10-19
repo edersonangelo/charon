@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -680,7 +681,8 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 								<td>{ stamp(ctx, provider.LastReceived) }</td>
 								<td colspan="2">
 									if may(ctx, authz.RoutesWrite) {
-										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
+										<form hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+												hx-on::confirm={ confirmBeforeDeliveringRecorded(fmt.Sprintf("Deliver all %d recorded events of %s to this destination?", provider.Events, provider.Provider)) }>
 											<input type="hidden" name="provider" value={ provider.Provider }/>
 											<input type="url" name="url" placeholder="https://service/webhooks/..." size="44" required/>
 											<input type="text" name="destination" placeholder={ provider.Provider } size="14"/>
@@ -762,7 +764,8 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 		if may(ctx, authz.RoutesWrite) {
 			<section>
 				<h2>Add a route</h2>
-				<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML">
+				<form class="filters" hx-post="/routes" hx-target="#routes" hx-select="#routes" hx-swap="outerHTML"
+						hx-on::confirm={ confirmBeforeDeliveringRecorded("Every event already recorded for this provider will be delivered to this destination. Continue?") }>
 					<input type="text" name="provider" placeholder="provider" required/>
 					<input type="url" name="url" placeholder="https://service/webhooks/..." size="40" required/>
 					<input type="text" name="destination" placeholder="destination name (optional)" size="24"/>
@@ -844,6 +847,17 @@ func prettyJSON(body []byte) string {
 		return string(body)
 	}
 	return out.String()
+}
+
+// Asked only when the past is chosen: that is the choice that can send
+// thousands of requests to a destination that did not expect them.
+func confirmBeforeDeliveringRecorded(question string) templ.ComponentScript {
+	quoted, _ := json.Marshal(question)
+	// templ writes a handler into the attribute as it is given, so it arrives
+	// escaped for HTML and the browser undoes that before running it.
+	return templ.ComponentScript{Call: html.EscapeString(fmt.Sprintf(
+		"if (this.elements.already_recorded.value === %q && !confirm(%s)) event.preventDefault()",
+		console.DeliverAlreadyRecorded, quoted))}
 }
 
 // counted keeps the plural honest, because "1 attempts" reads like a bug.
