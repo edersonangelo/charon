@@ -248,14 +248,16 @@ Nothing is delivered until a provider has a route. Adding one takes no deploy
 and no restart:
 
 ```sh
-docker compose run --rm charon route add -provider stripe -url https://api.internal/webhooks/stripe
+docker compose run --rm charon route add -provider stripe -url https://api.internal/webhooks/stripe -already-recorded deliver
 docker compose run --rm charon route list
 ```
 
 An event recorded for a provider with no enabled route waits. It is not
-discarded and it is not marked as handled: the moment a route appears, the next
-dispatch round delivers it. Configuring the route after the first event arrives
-costs nothing.
+discarded and it is not marked as handled. Whoever adds the route chooses what
+happens to it: `deliver` sends everything the provider has already sent, and
+`skip` sends only what arrives from then on. There is no default, because
+delivering the past can be thousands of requests to a destination that did not
+expect them.
 
 A route delivers its events in the order they arrived, one at a time: the next
 one goes only when the one before it was delivered or gave up. A delivery

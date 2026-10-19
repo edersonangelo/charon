@@ -328,7 +328,7 @@ func TestReplayReturnsADeadDeliveryToPendingAndKeepsItsHistory(t *testing.T) {
 	}))
 	t.Cleanup(refuse.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "refusing", refuse.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "refusing", refuse.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -439,8 +439,9 @@ func TestTheRoutesPageHighlightsProvidersWithNoRouteAndCreatesOne(t *testing.T) 
 	t.Cleanup(destination.Close)
 
 	created := do(t, client, http.MethodPost, server.URL+"/routes", url.Values{
-		"provider": {"stripe"},
-		"url":      {destination.URL},
+		"provider":         {"stripe"},
+		"url":              {destination.URL},
+		"already_recorded": {"deliver"},
 	})
 	if created.status != http.StatusOK {
 		t.Fatalf("creating the route = %d", created.status)
@@ -499,12 +500,39 @@ func TestARouteNeedsAnHttpDestination(t *testing.T) {
 
 	for _, bad := range []string{"", "not a url", "ftp://host/x", "/relative"} {
 		got := do(t, client, http.MethodPost, server.URL+"/routes", url.Values{
-			"provider": {"stripe"},
-			"url":      {bad},
+			"provider":         {"stripe"},
+			"url":              {bad},
+			"already_recorded": {"deliver"},
 		})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("creating a route with url %q = %d, want 400", bad, got.status)
 		}
+	}
+}
+
+func TestARouteIsNotCreatedUntilSomebodyChoosesWhatHappensToWhatWasRecorded(t *testing.T) {
+	t.Parallel()
+
+	store, server, client, _ := setup(t)
+	signIn(t, server, client, password)
+
+	for _, choice := range []string{"", "everything"} {
+		got := do(t, client, http.MethodPost, server.URL+"/routes", url.Values{
+			"provider":         {"stripe"},
+			"url":              {"http://service.internal/webhooks/stripe"},
+			"already_recorded": {choice},
+		})
+		if got.status != http.StatusBadRequest {
+			t.Errorf("creating a route choosing %q = %d, want 400", choice, got.status)
+		}
+	}
+
+	routes, err := store.DetailedRoutes(context.Background())
+	if err != nil {
+		t.Fatalf("reading routes: %v", err)
+	}
+	if len(routes) != 0 {
+		t.Errorf("routes = %+v, want none without a choice", routes)
 	}
 }
 
@@ -593,7 +621,7 @@ func TestChangingARouteDoesNotResendUntilTheOperatorAsks(t *testing.T) {
 	}))
 	t.Cleanup(newTarget.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "moving", oldTarget.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "moving", oldTarget.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -678,7 +706,7 @@ func TestASecondRouteReachesEventsThatWereAlreadyPlanned(t *testing.T) {
 
 	dispatcher := delivery.New(store, delivery.Config{})
 
-	if err := store.AddRoute(ctx, "stripe", "one", one.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "one", one.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the first route: %v", err)
 	}
 	for range 2 {
@@ -691,7 +719,7 @@ func TestASecondRouteReachesEventsThatWereAlreadyPlanned(t *testing.T) {
 	}
 
 	// The event is planned by now. A second destination must still reach it.
-	if err := store.AddRoute(ctx, "stripe", "two", two.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "two", two.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the second route: %v", err)
 	}
 	for range 2 {
@@ -722,7 +750,7 @@ func TestSwitchingADestinationBackOnReachesEventsPlannedWhileItWasOff(t *testing
 	}))
 	t.Cleanup(target.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "off-then-on", target.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "off-then-on", target.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 
@@ -829,7 +857,7 @@ func TestEveryReplayAnswersWithTheRegionItSwaps(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(target.Close)
-	if err := store.AddRoute(ctx, "stripe", "somewhere", target.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "somewhere", target.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 	if _, err := delivery.New(store, delivery.Config{}).Tick(ctx); err != nil {
@@ -928,10 +956,10 @@ func TestReplayDoesNotReachADestinationThatIsNoLongerRouted(t *testing.T) {
 	}))
 	t.Cleanup(droppedTarget.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "kept", keptTarget.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "kept", keptTarget.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route to keep: %v", err)
 	}
-	if err := store.AddRoute(ctx, "stripe", "dropped", droppedTarget.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "dropped", droppedTarget.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route to drop: %v", err)
 	}
 
@@ -990,14 +1018,14 @@ func TestAProviderCannotBeRoutedTwiceToTheSameUrl(t *testing.T) {
 	target := "http://service.internal/webhooks/stripe"
 
 	first := do(t, client, http.MethodPost, server.URL+"/routes", url.Values{
-		"provider": {"stripe"}, "url": {target}, "destination": {"one"},
+		"provider": {"stripe"}, "url": {target}, "destination": {"one"}, "already_recorded": {"deliver"},
 	})
 	if first.status != http.StatusOK {
 		t.Fatalf("first route = %d", first.status)
 	}
 
 	second := do(t, client, http.MethodPost, server.URL+"/routes", url.Values{
-		"provider": {"stripe"}, "url": {target}, "destination": {"two"},
+		"provider": {"stripe"}, "url": {target}, "destination": {"two"}, "already_recorded": {"deliver"},
 	})
 	if second.status != http.StatusConflict {
 		t.Errorf("second route to the same url = %d, want 409", second.status)
@@ -1030,10 +1058,10 @@ func TestTheListSeparatesRoutedFromOrphanedAndShowsAttempts(t *testing.T) {
 	}))
 	t.Cleanup(dropped.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "refusing", refusing.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "refusing", refusing.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the refusing route: %v", err)
 	}
-	if err := store.AddRoute(ctx, "stripe", "dropped", dropped.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "dropped", dropped.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route to drop: %v", err)
 	}
 
@@ -1107,7 +1135,7 @@ func TestTheDetailListsEveryDestinationBeforeTheAttemptHistory(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		t.Cleanup(target.Close)
-		if err := store.AddRoute(ctx, "stripe", name, target.URL, outbound.HTTP); err != nil {
+		if err := store.AddRoute(ctx, "stripe", name, target.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 			t.Fatalf("adding route %s: %v", name, err)
 		}
 	}
@@ -1174,10 +1202,10 @@ func TestFilteringByDeliveryState(t *testing.T) {
 	}
 	deadEvent, waitingEvent := recorded["github"], recorded["nobody"]
 
-	if err := store.AddRoute(ctx, "stripe", "accepts", accepts.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "accepts", accepts.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the accepting route: %v", err)
 	}
-	if err := store.AddRoute(ctx, "github", "refuses", refuses.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "github", "refuses", refuses.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the refusing route: %v", err)
 	}
 

@@ -546,16 +546,22 @@ func (s *Store) DetailedRoutes(ctx context.Context) ([]console.RouteRow, error) 
 		if signErr != nil {
 			return nil, signErr
 		}
+		alreadyRecorded := console.SkipAlreadyRecorded
+		if row.DeliversRecorded {
+			alreadyRecorded = console.DeliverAlreadyRecorded
+		}
 		routes = append(routes, console.RouteRow{
-			ID:            row.ID,
-			Provider:      row.Provider,
-			DestinationID: row.DestinationID,
-			Destination:   row.Name,
-			Transport:     row.Transport,
-			URL:           row.Url,
-			Enabled:       row.Enabled,
-			Deliveries:    row.Deliveries,
-			Signing:       signing,
+			ID:                 row.ID,
+			Provider:           row.Provider,
+			DestinationID:      row.DestinationID,
+			Destination:        row.Name,
+			Transport:          row.Transport,
+			URL:                row.Url,
+			Enabled:            row.Enabled,
+			Deliveries:         row.Deliveries,
+			Signing:            signing,
+			AlreadyRecorded:    alreadyRecorded,
+			EventsReceivedFrom: row.EventsReceivedFrom,
 		})
 	}
 	return routes, nil

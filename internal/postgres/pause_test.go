@@ -49,7 +49,7 @@ func TestSwitchingADestinationOffHoldsWhatIsWaiting(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	arrival(ctx, t, store, `{"n":1}`)
@@ -107,7 +107,7 @@ func TestWhatArrivesWhileItIsOffGoesWhenItComesBack(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	route := theRoute(ctx, t, store)
@@ -156,13 +156,14 @@ func TestComingBackReachesEveryProviderTheDestinationServes(t *testing.T) {
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
 	for _, provider := range []string{"erp", "crm"} {
-		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http"); err != nil {
+		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 			t.Fatalf("routing %s: %v", provider, err)
 		}
 	}
 	// So that crm's event is planned while the sink is off, and comes back
 	// carrying no delivery for it.
-	if err := store.AddRoute(ctx, "crm", "elsewhere", "https://elsewhere.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "crm", "elsewhere", "https://elsewhere.example/h", "http",
+		console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing crm elsewhere: %v", err)
 	}
 	routes, err := store.DetailedRoutes(ctx)

@@ -98,9 +98,9 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 			continue
 		}
 
-		destinations, destErr := q.EnabledDestinationsForProvider(ctx,
-			db.EnabledDestinationsForProviderParams{
-				TenantID: event.TenantID, Provider: event.Provider,
+		destinations, destErr := q.EnabledDestinationsForEvent(ctx,
+			db.EnabledDestinationsForEventParams{
+				TenantID: event.TenantID, Provider: event.Provider, ReceivedAt: event.ReceivedAt,
 			})
 		if destErr != nil {
 			return 0, 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)
@@ -289,7 +289,11 @@ func DeliverableURL(raw string) (string, error) {
 
 func (s *Store) AddRoute(
 	ctx context.Context, provider, destination, url, transport string,
+	alreadyRecorded console.AlreadyRecorded,
 ) error {
+	if _, err := console.ParseAlreadyRecorded(string(alreadyRecorded)); err != nil {
+		return err
+	}
 	if transport == "" {
 		transport = outbound.HTTP
 	}
@@ -338,8 +342,10 @@ func (s *Store) AddRoute(
 		return ErrAlreadyRouted
 	}
 
+	deliverRecorded := alreadyRecorded == console.DeliverAlreadyRecorded
 	if err := q.CreateRoute(ctx, db.CreateRouteParams{
 		TenantID: s.tenantOf(ctx), Provider: provider, DestinationID: existing.ID,
+		DeliverRecorded: deliverRecorded,
 	}); err != nil {
 		return fmt.Errorf("creating the route: %w", err)
 	}
@@ -347,8 +353,10 @@ func (s *Store) AddRoute(
 	// Routes are evaluated once per event. Without unplanning, a route added
 	// after an event was planned would never reach it, and there would be no
 	// delivery row to resend either.
-	if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: provider, TenantID: s.tenantOf(ctx)}); err != nil {
-		return fmt.Errorf("reopening planning for %q: %w", provider, err)
+	if deliverRecorded {
+		if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: provider, TenantID: s.tenantOf(ctx)}); err != nil {
+			return fmt.Errorf("reopening planning for %q: %w", provider, err)
+		}
 	}
 
 	// A new route can make events that were waiting for one deliverable, and

@@ -90,12 +90,12 @@ func TestRoutesDoNotCrossTenants(t *testing.T) {
 	ours := authz.WithTenant(ctx, first.ID)
 	theirs := authz.WithTenant(ctx, second.ID)
 
-	if err := store.AddRoute(ours, "stripe", "ours", "https://ours.example/hooks", ""); err != nil {
+	if err := store.AddRoute(ours, "stripe", "ours", "https://ours.example/hooks", "", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing for the first tenant: %v", err)
 	}
 	// The same destination name and the same url, which is only possible
 	// because they are different tenants.
-	if err := store.AddRoute(theirs, "stripe", "ours", "https://ours.example/hooks", ""); err != nil {
+	if err := store.AddRoute(theirs, "stripe", "ours", "https://ours.example/hooks", "", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing for the second tenant: %v", err)
 	}
 

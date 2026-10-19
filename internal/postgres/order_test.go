@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
@@ -51,7 +52,7 @@ func TestOnlyTheFirstWaitingDeliveryOfARouteIsClaimed(t *testing.T) {
 	ctx := inTenant(t, store, "in-order")
 
 	for _, provider := range []string{"erp", "crm"} {
-		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http"); err != nil {
+		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 			t.Fatalf("routing %s: %v", provider, err)
 		}
 	}
@@ -105,7 +106,7 @@ func TestOneWaitingOutARetryHoldsTheOnesBehindIt(t *testing.T) {
 	store, _ := open(t)
 	ctx := inTenant(t, store, "held")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	start := time.Now().Add(-time.Minute)
@@ -139,7 +140,7 @@ func TestADeadDeliveryLetsTheNextOneGo(t *testing.T) {
 	store, _ := open(t)
 	ctx := inTenant(t, store, "dead-ahead")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	start := time.Now().Add(-time.Minute)
@@ -173,7 +174,7 @@ func TestAnEarlierEventNotYetPlannedHoldsTheRoute(t *testing.T) {
 	store, _ := open(t)
 	ctx := inTenant(t, store, "late-plan")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	now := time.Now()
@@ -209,7 +210,7 @@ func TestTwoDispatchersNeverTakeTwoFromOneRoute(t *testing.T) {
 	store, _ := open(t)
 	ctx := inTenant(t, store, "side-by-side")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	start := time.Now().Add(-time.Minute)

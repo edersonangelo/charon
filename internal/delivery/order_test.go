@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/outbound"
 )
@@ -39,7 +40,7 @@ func TestARouteDeliversInTheOrderItsEventsArrivedThroughARetry(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := store.AddRoute(ctx, "stripe", "ordered", server.URL, outbound.HTTP); err != nil {
+	if err := store.AddRoute(ctx, "stripe", "ordered", server.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
 	start := time.Now().Add(-time.Minute)

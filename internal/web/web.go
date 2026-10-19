@@ -81,7 +81,8 @@ type Store interface {
 	Unsigned(ctx context.Context) ([]console.UnsignedDestination, error)
 	Force(ctx context.Context, operator uuid.UUID, reason string, events []uuid.UUID) (int64, error)
 	SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, error)
-	AddRoute(ctx context.Context, provider, destination, url, transport string) error
+	AddRoute(ctx context.Context, provider, destination, url, transport string,
+		alreadyRecorded console.AlreadyRecorded) error
 	SaveRoute(ctx context.Context, routeID uuid.UUID, url string, enabled bool) error
 	DeleteRoute(ctx context.Context, routeID uuid.UUID) error
 	ReplayDestination(ctx context.Context, routeID uuid.UUID) (int64, error)
@@ -719,7 +720,13 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.AddRoute(r.Context(), provider, destination, target, transport); err != nil {
+	alreadyRecorded, err := console.ParseAlreadyRecorded(r.PostForm.Get("already_recorded"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.AddRoute(r.Context(), provider, destination, target, transport, alreadyRecorded); err != nil {
 		if errors.Is(err, postgres.ErrAlreadyRouted) {
 			http.Error(w, provider+" already delivers to that url", http.StatusConflict)
 			return
@@ -729,7 +736,7 @@ func (h *Handler) createRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.InfoContext(r.Context(), "created a route",
 		"provider", provider, "destination", destination, "transport", transport,
-		"url", target, "by", currentUser(r).Email)
+		"url", target, "already_recorded", alreadyRecorded, "by", currentUser(r).Email)
 
 	h.routes(w, r)
 }

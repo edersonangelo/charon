@@ -27,7 +27,7 @@ func TestWhatTheDestinationSaidIsReadBack(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	if _, err := store.Record(ctx, inbound.Request{
@@ -80,7 +80,7 @@ func TestAnAttemptWithNoAnswerKeepsNone(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	if _, err := store.Record(ctx, inbound.Request{
@@ -123,7 +123,7 @@ func TestAnAbsurdContentTypeDoesNotLoseTheAttempt(t *testing.T) {
 	}
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	if _, err := store.Record(ctx, inbound.Request{

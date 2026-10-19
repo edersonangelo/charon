@@ -7,8 +7,9 @@ returning *;
 select * from destination where tenant_id = $1 and name = $2;
 
 -- name: CreateRoute :exec
-insert into route (tenant_id, provider, destination_id)
-values ($1, $2, $3)
+insert into route (tenant_id, provider, destination_id, events_received_from)
+values ($1, $2, $3,
+        case when sqlc.arg(deliver_recorded)::boolean then '-infinity'::timestamptz else now() end)
 on conflict (tenant_id, provider, destination_id) do nothing;
 
 -- name: ListRoutes :many
@@ -26,24 +27,23 @@ order by r.provider, d.name;
 -- An event no route wants is left out: taking it would spend the batch on it
 -- every round, and a tenant with enough of them would never plan again.
 -- name: ClaimUnplannedEvents :many
-select e.id, e.tenant_id, e.provider, e.signature,
+select e.id, e.tenant_id, e.provider, e.signature, e.received_at,
        (e.override_id is not null)::boolean as overridden
 from inbound_event e
 where e.planned_at is null
   and ((e.signature in ('invalid', 'missing') and e.override_id is null)
-       or exists (
-           select 1 from route r
-           join destination d on d.id = r.destination_id and d.enabled
-           where r.provider = e.provider
-       ))
+       or wanted_by_a_route(e.provider, e.received_at))
 order by e.received_at
 limit $1
 for update skip locked;
 
--- name: EnabledDestinationsForProvider :many
+-- name: EnabledDestinationsForEvent :many
 select d.id from route r
 join destination d on d.id = r.destination_id
-where r.tenant_id = $1 and r.provider = $2 and d.enabled;
+where r.tenant_id = sqlc.arg(tenant_id)
+  and r.provider = sqlc.arg(provider)
+  and r.events_received_from <= sqlc.arg(received_at)
+  and d.enabled;
 
 -- name: CreateDelivery :exec
 insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
@@ -85,6 +85,10 @@ where id in (
           where unplanned.planned_at is null
             and unplanned.provider = e.provider
             and (unplanned.received_at, unplanned.id) < (e.received_at, e.id)
+            and unplanned.received_at >= (
+                select r.events_received_from from route r
+                where r.provider = e.provider and r.destination_id = dl.destination_id
+            )
       )
     order by dl.next_attempt_at
     limit sqlc.arg(batch_size)
@@ -135,11 +139,10 @@ with next as (
          where dl.state = 'pending' and d.enabled),
         (select case when exists (
                     select 1 from inbound_event e
-                    join route r on r.provider = e.provider
-                    join destination d on d.id = r.destination_id and d.enabled
                     where e.planned_at is null
                       and (e.signature in ('unchecked', 'valid')
                            or e.override_id is not null)
+                      and wanted_by_a_route(e.provider, e.received_at)
                 ) then now() end)
     ) as at
 )

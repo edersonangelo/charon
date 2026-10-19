@@ -64,7 +64,7 @@ type Querier interface {
 	DestinationsWithoutSigning(ctx context.Context, tenantID uuid.UUID) ([]DestinationsWithoutSigningRow, error)
 	DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error)
 	DistinctProviders(ctx context.Context, tenantID uuid.UUID) ([]string, error)
-	EnabledDestinationsForProvider(ctx context.Context, arg EnabledDestinationsForProviderParams) ([]uuid.UUID, error)
+	EnabledDestinationsForEvent(ctx context.Context, arg EnabledDestinationsForEventParams) ([]uuid.UUID, error)
 	EventDeliveries(ctx context.Context, arg EventDeliveriesParams) ([]EventDeliveriesRow, error)
 	EventDetail(ctx context.Context, arg EventDetailParams) (EventDetailRow, error)
 	// Every number a scrape reports, one tenant at a time. A scrape covers the

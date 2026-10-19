@@ -154,11 +154,12 @@ type RoleGrant struct {
 }
 
 type Route struct {
-	ID            uuid.UUID
-	Provider      string
-	DestinationID uuid.UUID
-	CreatedAt     time.Time
-	TenantID      uuid.UUID
+	ID                 uuid.UUID
+	Provider           string
+	DestinationID      uuid.UUID
+	CreatedAt          time.Time
+	TenantID           uuid.UUID
+	EventsReceivedFrom time.Time
 }
 
 type SchemaMigration struct {

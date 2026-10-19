@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/delivery"
 	"github.com/edersonangelo/charon/internal/outbound"
 	"github.com/edersonangelo/charon/internal/postgres"
@@ -203,7 +204,7 @@ func purgeWhatIsNoLongerKept(
 }
 
 var errRouteUsage = errors.New("usage: charon route add -provider <name> -url <url> " +
-	"[-destination <name>] [-tenant <slug>] | charon route list")
+	"-already-recorded deliver|skip [-destination <name>] [-tenant <slug>] | charon route list")
 
 func route(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -230,6 +231,8 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	url := fs.String("url", "", "where the events are delivered")
 	transport := fs.String("transport", outbound.HTTP, "kind of destination")
 	destination := fs.String("destination", "", "name for the destination, defaults to the provider")
+	recorded := fs.String("already-recorded", "",
+		"deliver: send every event the provider already sent; skip: only what arrives from now on")
 	slug := tenantFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -240,6 +243,10 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	if *provider == "" || *url == "" {
 		return errRouteUsage
+	}
+	alreadyRecorded, err := console.ParseAlreadyRecorded(*recorded)
+	if err != nil {
+		return err
 	}
 	if *destination == "" {
 		*destination = *provider
@@ -261,7 +268,7 @@ func routeAdd(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
-	if err := store.AddRoute(ctx, *provider, *destination, *url, *transport); err != nil {
+	if err := store.AddRoute(ctx, *provider, *destination, *url, *transport, alreadyRecorded); err != nil {
 		return err
 	}
 

@@ -103,7 +103,7 @@ func TestAnEventStillBeingDeliveredStays(t *testing.T) {
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
 	if err := store.AddRoute(ctx, "stripe", "billing",
-		"https://billing.internal/hook", "http"); err != nil {
+		"https://billing.internal/hook", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	aged(ctx, t, store, 40*24*time.Hour)

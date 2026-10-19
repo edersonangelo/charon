@@ -25,7 +25,7 @@ func refusedEvents(ctx context.Context, t *testing.T, store *postgres.Store) []c
 	}); err != nil {
 		t.Fatalf("configuring verification: %v", err)
 	}
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http"); err != nil {
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 

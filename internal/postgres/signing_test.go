@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/edersonangelo/charon/internal/authz"
+	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/inbound"
 	"github.com/edersonangelo/charon/internal/postgres"
 )
@@ -22,7 +23,7 @@ func signingTenant(t *testing.T, store *postgres.Store, slug string) context.Con
 	ctx := authz.WithTenant(context.Background(), tenant.ID)
 
 	if err := store.AddRoute(ctx, "stripe", "billing",
-		"https://billing.internal/hook", "http"); err != nil {
+		"https://billing.internal/hook", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
 	return ctx
