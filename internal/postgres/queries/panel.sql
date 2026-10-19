@@ -264,6 +264,13 @@ where dl.destination_id = $1
 -- name: UnplanProvider :execrows
 update inbound_event set planned_at = null where provider = $1 and tenant_id = $2;
 
+-- name: UnplanEverythingRoutedTo :execrows
+update inbound_event as e set planned_at = null
+where e.tenant_id = sqlc.arg(tenant_id)
+  and e.provider in (
+      select r.provider from route r where r.destination_id = sqlc.arg(destination_id)
+  );
+
 -- name: ProviderAlreadyRoutedTo :one
 select exists (
     select 1 from route r

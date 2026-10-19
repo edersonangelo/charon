@@ -1757,6 +1757,27 @@ func (q *Queries) UnplanEvent(ctx context.Context, arg UnplanEventParams) error 
 	return err
 }
 
+const unplanEverythingRoutedTo = `-- name: UnplanEverythingRoutedTo :execrows
+update inbound_event as e set planned_at = null
+where e.tenant_id = $1
+  and e.provider in (
+      select r.provider from route r where r.destination_id = $2
+  )
+`
+
+type UnplanEverythingRoutedToParams struct {
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+}
+
+func (q *Queries) UnplanEverythingRoutedTo(ctx context.Context, arg UnplanEverythingRoutedToParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unplanEverythingRoutedTo, arg.TenantID, arg.DestinationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const unplanProvider = `-- name: UnplanProvider :execrows
 update inbound_event set planned_at = null where provider = $1 and tenant_id = $2
 `

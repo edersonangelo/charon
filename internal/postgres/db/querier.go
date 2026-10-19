@@ -184,6 +184,7 @@ type Querier interface {
 	// once rather than at the end of a backoff earned by a typo.
 	TryAgainAtTheNewAddress(ctx context.Context, arg TryAgainAtTheNewAddressParams) (int64, error)
 	UnplanEvent(ctx context.Context, arg UnplanEventParams) error
+	UnplanEverythingRoutedTo(ctx context.Context, arg UnplanEverythingRoutedToParams) (int64, error)
 	UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error)
 	UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error)
 	UnverifiedEvents(ctx context.Context, arg UnverifiedEventsParams) ([]UnverifiedEventsRow, error)

@@ -144,3 +144,74 @@ func TestWhatArrivesWhileItIsOffGoesWhenItComesBack(t *testing.T) {
 		t.Errorf("claimed %d, want both that arrived while it was off", len(claimed))
 	}
 }
+
+func TestComingBackReachesEveryProviderTheDestinationServes(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	tenant, err := store.CreateTenant(context.Background(), "paused-shared", "Shared")
+	if err != nil {
+		t.Fatalf("creating the tenant: %v", err)
+	}
+	ctx := authz.WithTenant(context.Background(), tenant.ID)
+
+	for _, provider := range []string{"erp", "crm"} {
+		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http"); err != nil {
+			t.Fatalf("routing %s: %v", provider, err)
+		}
+	}
+	// So that crm's event is planned while the sink is off, and comes back
+	// carrying no delivery for it.
+	if err := store.AddRoute(ctx, "crm", "elsewhere", "https://elsewhere.example/h", "http"); err != nil {
+		t.Fatalf("routing crm elsewhere: %v", err)
+	}
+	routes, err := store.DetailedRoutes(ctx)
+	if err != nil {
+		t.Fatalf("reading the routes: %v", err)
+	}
+	var erp console.RouteRow
+	for _, route := range routes {
+		if route.Provider == "erp" {
+			erp = route
+		}
+	}
+	if err := store.SaveRoute(ctx, erp.ID, erp.URL, false); err != nil {
+		t.Fatalf("switching it off: %v", err)
+	}
+
+	for _, provider := range []string{"erp", "crm"} {
+		if _, err := store.Record(ctx, inbound.Request{
+			Provider:   provider,
+			Path:       "/webhooks/" + provider,
+			ReceivedAt: time.Now().UTC(),
+			Headers:    map[string][]string{"Content-Type": {"application/json"}},
+			Body:       []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("recording for %s: %v", provider, err)
+		}
+	}
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning while off: %v", err)
+	}
+
+	if err := store.SaveRoute(ctx, erp.ID, erp.URL, true); err != nil {
+		t.Fatalf("switching it back on: %v", err)
+	}
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning after it came back: %v", err)
+	}
+
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming after it came back: %v", err)
+	}
+	reached := map[string]bool{}
+	for _, delivery := range claimed {
+		if delivery.URL == "https://sink.example/h" {
+			reached[delivery.Provider] = true
+		}
+	}
+	if !reached["erp"] || !reached["crm"] {
+		t.Errorf("the sink reached %v after it came back, want both erp and crm", reached)
+	}
+}
