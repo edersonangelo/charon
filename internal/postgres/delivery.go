@@ -355,12 +355,14 @@ func (s *Store) AddRoute(
 		return fmt.Errorf("creating the route: %w", err)
 	}
 
-	// Routes are evaluated once per event. Without unplanning, a route added
-	// after an event was planned would never reach it, and there would be no
-	// delivery row to resend either.
+	// Routes are evaluated once per event, so what was planned before this
+	// route existed carries no delivery for it.
 	if deliverRecorded {
-		if _, err := q.UnplanProvider(ctx, db.UnplanProviderParams{Provider: provider, TenantID: s.tenantOf(ctx)}); err != nil {
-			return fmt.Errorf("reopening planning for %q: %w", provider, err)
+		if _, err := q.DeliverWhatWasRecordedTo(ctx, db.DeliverWhatWasRecordedToParams{
+			TenantID: s.tenantOf(ctx), DestinationID: existing.ID,
+			Provider: pgtype.Text{String: provider, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("delivering what %q already sent: %w", provider, err)
 		}
 	}
 

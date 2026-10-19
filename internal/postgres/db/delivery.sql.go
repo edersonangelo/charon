@@ -235,6 +235,39 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.
 	return id, err
 }
 
+const deliverWhatWasRecordedTo = `-- name: DeliverWhatWasRecordedTo :execrows
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+select e.tenant_id, e.id, r.destination_id, e.provider, 'pending', now()
+from route r
+join inbound_event e on e.tenant_id = r.tenant_id and e.provider = r.provider
+where r.tenant_id = $1
+  and r.destination_id = $2
+  and ($3::varchar is null or r.provider = $3::varchar)
+  and e.planned_at is not null
+  and (e.signature in ('unchecked', 'valid') or e.override_id is not null)
+  and recorded_since(e.id, r.events_recorded_from)
+on conflict (event_id, destination_id) do nothing
+`
+
+type DeliverWhatWasRecordedToParams struct {
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+	Provider      pgtype.Text
+}
+
+// What a destination is owed from before it could be reached: events already
+// planned without it, because its route did not exist yet or it was switched
+// off. They are given their deliveries here rather than planned again, because
+// planning them again would hold every other route of the provider until the
+// whole history had been through planning once more.
+func (q *Queries) DeliverWhatWasRecordedTo(ctx context.Context, arg DeliverWhatWasRecordedToParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deliverWhatWasRecordedTo, arg.TenantID, arg.DestinationID, arg.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deliveryTarget = `-- name: DeliveryTarget :one
 select d.url, d.transport, e.provider, e.path, r.headers, r.body
 from delivery dl

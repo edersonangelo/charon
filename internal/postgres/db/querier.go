@@ -59,6 +59,12 @@ type Querier interface {
 	DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, error)
 	DeleteRoute(ctx context.Context, arg DeleteRouteParams) error
 	DeleteTenant(ctx context.Context, slug string) error
+	// What a destination is owed from before it could be reached: events already
+	// planned without it, because its route did not exist yet or it was switched
+	// off. They are given their deliveries here rather than planned again, because
+	// planning them again would hold every other route of the provider until the
+	// whole history had been through planning once more.
+	DeliverWhatWasRecordedTo(ctx context.Context, arg DeliverWhatWasRecordedToParams) (int64, error)
 	DeliveryAttempts(ctx context.Context, arg DeliveryAttemptsParams) ([]DeliveryAttemptsRow, error)
 	DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) ([]DeliveryStateTotalsRow, error)
 	DeliveryTarget(ctx context.Context, id uuid.UUID) (DeliveryTargetRow, error)
@@ -194,8 +200,6 @@ type Querier interface {
 	// once rather than at the end of a backoff earned by a typo.
 	TryAgainAtTheNewAddress(ctx context.Context, arg TryAgainAtTheNewAddressParams) (int64, error)
 	UnplanEvent(ctx context.Context, arg UnplanEventParams) error
-	UnplanEverythingRoutedTo(ctx context.Context, arg UnplanEverythingRoutedToParams) (int64, error)
-	UnplanProvider(ctx context.Context, arg UnplanProviderParams) (int64, error)
 	UnroutedProviders(ctx context.Context, tenantID uuid.UUID) ([]UnroutedProvidersRow, error)
 	UnverifiedEvents(ctx context.Context, arg UnverifiedEventsParams) ([]UnverifiedEventsRow, error)
 	UpdateDestination(ctx context.Context, arg UpdateDestinationParams) error

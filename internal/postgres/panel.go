@@ -611,10 +611,10 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 	// A destination coming back on has the same gap a new route has: events
 	// planned while it was off carry no delivery for it.
 	if enabled && !route.Enabled {
-		if _, err := q.UnplanEverythingRoutedTo(ctx, db.UnplanEverythingRoutedToParams{
-			DestinationID: route.DestinationID, TenantID: s.tenantOf(ctx),
+		if _, err := q.DeliverWhatWasRecordedTo(ctx, db.DeliverWhatWasRecordedToParams{
+			TenantID: s.tenantOf(ctx), DestinationID: route.DestinationID,
 		}); err != nil {
-			return fmt.Errorf("reopening planning for %q: %w", route.Name, err)
+			return fmt.Errorf("delivering what %q missed while it was off: %w", route.Name, err)
 		}
 	}
 

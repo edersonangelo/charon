@@ -54,6 +54,24 @@ insert into delivery (tenant_id, event_id, destination_id, event_provider, state
 values ($1, $2, $3, $4, 'pending', now())
 on conflict (event_id, destination_id) do nothing;
 
+-- What a destination is owed from before it could be reached: events already
+-- planned without it, because its route did not exist yet or it was switched
+-- off. They are given their deliveries here rather than planned again, because
+-- planning them again would hold every other route of the provider until the
+-- whole history had been through planning once more.
+-- name: DeliverWhatWasRecordedTo :execrows
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+select e.tenant_id, e.id, r.destination_id, e.provider, 'pending', now()
+from route r
+join inbound_event e on e.tenant_id = r.tenant_id and e.provider = r.provider
+where r.tenant_id = sqlc.arg(tenant_id)
+  and r.destination_id = sqlc.arg(destination_id)
+  and (sqlc.narg(provider)::varchar is null or r.provider = sqlc.narg(provider)::varchar)
+  and e.planned_at is not null
+  and (e.signature in ('unchecked', 'valid') or e.override_id is not null)
+  and recorded_since(e.id, r.events_recorded_from)
+on conflict (event_id, destination_id) do nothing;
+
 -- name: MarkEventPlanned :exec
 update inbound_event set planned_at = now() where id = $1;
 

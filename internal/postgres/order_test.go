@@ -263,34 +263,6 @@ func TestTwoDispatchersNeverTakeTwoFromOneRoute(t *testing.T) {
 	}
 }
 
-func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
-	t.Parallel()
-
-	store, _ := open(t)
-	ctx := inTenant(t, store, "routed-twice")
-
-	arrivedAt(ctx, t, store, "erp", `{"n":1}`, time.Now())
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.SkipAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
-
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/other", "http",
-		console.DeliverAlreadyRecorded); err == nil {
-		t.Error("routing erp to sink a second time succeeded, and its choice was ignored")
-	}
-
-	if _, err := store.Plan(ctx, 10); err != nil {
-		t.Fatalf("planning: %v", err)
-	}
-	claimed, err := store.Claim(ctx, 10, time.Minute)
-	if err != nil {
-		t.Fatalf("claiming: %v", err)
-	}
-	if len(claimed) != 0 {
-		t.Errorf("claimed %v: the route that skips the past delivered it", bodies(claimed))
-	}
-}
-
 func TestTheDispatcherSleepsWhileTheFirstOfARouteWaitsOutItsRetry(t *testing.T) {
 	t.Parallel()
 
@@ -324,5 +296,77 @@ func TestTheDispatcherSleepsWhileTheFirstOfARouteWaitsOutItsRetry(t *testing.T) 
 	if !found || at.Before(retryAt.Add(-time.Second)) {
 		t.Errorf("next work at %s (found %v), want the retry at %s: nothing behind it can go before",
 			at, found, retryAt)
+	}
+}
+
+func TestANewRouteDoesNotHoldUpTheProvidersOtherRoutes(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "side-routes")
+
+	if err := store.AddRoute(ctx, "erp", "first", "https://first.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing to the first: %v", err)
+	}
+	start := time.Now().Add(-time.Minute)
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
+	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	delivered, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil || len(delivered) != 1 {
+		t.Fatalf("claiming: %v (%v)", err, bodies(delivered))
+	}
+	if err := store.MarkDelivered(ctx, delivered[0].Tenant, delivered[0].ID, 200); err != nil {
+		t.Fatalf("marking delivered: %v", err)
+	}
+
+	if err := store.AddRoute(ctx, "erp", "second", "https://second.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing to the second: %v", err)
+	}
+
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming after the second route: %v", err)
+	}
+	got := map[string]string{}
+	for _, delivery := range claimed {
+		got[delivery.URL] = string(delivery.Body)
+	}
+	if got["https://first.example/h"] != `{"n":2}` {
+		t.Errorf("the first route claimed %q, want its next event without waiting on the second route's past",
+			got["https://first.example/h"])
+	}
+	if got["https://second.example/h"] != `{"n":1}` {
+		t.Errorf("the second route claimed %q, want the first event it was given", got["https://second.example/h"])
+	}
+}
+
+func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "routed-twice")
+
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, time.Now())
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.SkipAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/other", "http",
+		console.DeliverAlreadyRecorded); err == nil {
+		t.Error("routing erp to sink a second time succeeded, and its choice was ignored")
+	}
+
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claiming: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Errorf("claimed %v: the route that skips the past delivered it", bodies(claimed))
 	}
 }
