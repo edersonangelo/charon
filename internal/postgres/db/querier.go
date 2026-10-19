@@ -90,6 +90,13 @@ type Querier interface {
 	GetInboundEvent(ctx context.Context, arg GetInboundEventParams) (InboundEvent, error)
 	GetInboundRequest(ctx context.Context, arg GetInboundRequestParams) (InboundRequest, error)
 	GrantPermission(ctx context.Context, arg GrantPermissionParams) error
+	HoldRoutesForChange(ctx context.Context, tenantID uuid.UUID) error
+	// Planning reads which routes an event goes to and gives it its deliveries in
+	// one transaction, and a route added or switched back on gives deliveries to
+	// what was planned before it. Each waits for the other, or an event planned
+	// while a route appeared would be given to neither. Planning shares the hold:
+	// dispatchers running side by side do not wait for each other.
+	HoldRoutesForPlanning(ctx context.Context, tenantID uuid.UUID) error
 	// A value that names only a tenant leaves the role to whoever decides it here,
 	// so arriving again does not undo it.
 	JoinFromProvider(ctx context.Context, arg JoinFromProviderParams) error

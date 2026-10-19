@@ -584,6 +584,10 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 
 	q := s.q.WithTx(tx)
 
+	if err := q.HoldRoutesForChange(ctx, s.tenantOf(ctx)); err != nil {
+		return fmt.Errorf("waiting for planning to finish: %w", err)
+	}
+
 	if err := q.UpdateDestination(ctx, db.UpdateDestinationParams{
 		ID: route.DestinationID, TenantID: s.tenantOf(ctx), Url: url, Enabled: enabled,
 	}); err != nil {

@@ -359,6 +359,29 @@ func (q *Queries) EnabledDestinationsForEvent(ctx context.Context, arg EnabledDe
 	return items, nil
 }
 
+const holdRoutesForChange = `-- name: HoldRoutesForChange :exec
+select pg_advisory_xact_lock(2, hashtext($1::uuid::text))
+`
+
+func (q *Queries) HoldRoutesForChange(ctx context.Context, tenantID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, holdRoutesForChange, tenantID)
+	return err
+}
+
+const holdRoutesForPlanning = `-- name: HoldRoutesForPlanning :exec
+select pg_advisory_xact_lock_shared(2, hashtext($1::uuid::text))
+`
+
+// Planning reads which routes an event goes to and gives it its deliveries in
+// one transaction, and a route added or switched back on gives deliveries to
+// what was planned before it. Each waits for the other, or an event planned
+// while a route appeared would be given to neither. Planning shares the hold:
+// dispatchers running side by side do not wait for each other.
+func (q *Queries) HoldRoutesForPlanning(ctx context.Context, tenantID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, holdRoutesForPlanning, tenantID)
+	return err
+}
+
 const listRoutes = `-- name: ListRoutes :many
 select r.provider, d.name, d.url, d.transport, d.enabled,
        (select count(*) from signing_secret s where s.destination_id = d.id) as signed

@@ -72,6 +72,17 @@ where r.tenant_id = sqlc.arg(tenant_id)
   and recorded_since(e.id, r.events_recorded_from)
 on conflict (event_id, destination_id) do nothing;
 
+-- Planning reads which routes an event goes to and gives it its deliveries in
+-- one transaction, and a route added or switched back on gives deliveries to
+-- what was planned before it. Each waits for the other, or an event planned
+-- while a route appeared would be given to neither. Planning shares the hold:
+-- dispatchers running side by side do not wait for each other.
+-- name: HoldRoutesForPlanning :exec
+select pg_advisory_xact_lock_shared(2, hashtext(sqlc.arg(tenant_id)::uuid::text));
+
+-- name: HoldRoutesForChange :exec
+select pg_advisory_xact_lock(2, hashtext(sqlc.arg(tenant_id)::uuid::text));
+
 -- name: MarkEventPlanned :exec
 update inbound_event set planned_at = now() where id = $1;
 

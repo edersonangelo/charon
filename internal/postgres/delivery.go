@@ -82,6 +82,10 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 
 	q := s.q.WithTx(tx)
 
+	if err := q.HoldRoutesForPlanning(ctx, s.tenantOf(ctx)); err != nil {
+		return 0, 0, fmt.Errorf("waiting for routes being changed: %w", err)
+	}
+
 	events, err := q.ClaimUnplannedEvents(ctx, int32(batch)) //nolint:gosec // batch is small
 	if err != nil {
 		return 0, 0, fmt.Errorf("claiming unplanned events: %w", err)
@@ -316,6 +320,10 @@ func (s *Store) AddRoute(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.q.WithTx(tx)
+
+	if err := q.HoldRoutesForChange(ctx, s.tenantOf(ctx)); err != nil {
+		return fmt.Errorf("waiting for planning to finish: %w", err)
+	}
 
 	existing, err := q.DestinationByName(ctx, db.DestinationByNameParams{
 		TenantID: s.tenantOf(ctx), Name: destination,
