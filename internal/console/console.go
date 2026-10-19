@@ -265,7 +265,7 @@ type RouteRow struct {
 	Deliveries         int64
 	Signing            []SigningSecret
 	AlreadyRecorded    AlreadyRecorded
-	EventsReceivedFrom time.Time
+	EventsRecordedFrom time.Time
 }
 
 // AlreadyRecorded is what a new route does with the events its provider sent

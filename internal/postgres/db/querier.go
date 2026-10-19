@@ -45,6 +45,8 @@ type Querier interface {
 	CreateInboundRequest(ctx context.Context, arg CreateInboundRequestParams) error
 	CreatePanelSession(ctx context.Context, arg CreatePanelSessionParams) error
 	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error)
+	// An event's identifier carries its instant to the millisecond, so a route
+	// starts on a millisecond too: what is recorded in the same one counts as after.
 	CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error)
 	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
 	CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error

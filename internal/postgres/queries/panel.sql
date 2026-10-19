@@ -212,8 +212,8 @@ order by max(e.received_at) desc;
 -- name: DetailedRoutes :many
 select r.id, r.provider, d.id as destination_id, d.name, d.url, d.transport, d.enabled,
        (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries,
-       (r.events_received_from = '-infinity')::boolean as delivers_recorded,
-       greatest(r.events_received_from, r.created_at)::timestamptz as events_received_from
+       (r.events_recorded_from = '-infinity')::boolean as delivers_recorded,
+       greatest(r.events_recorded_from, r.created_at)::timestamptz as events_recorded_from
 from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1

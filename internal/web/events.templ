@@ -630,7 +630,7 @@ templ alreadyRecordedChoice(deliverLabel string) {
 
 templ routeDeliveries(route console.RouteRow) {
 	if route.AlreadyRecorded == console.SkipAlreadyRecorded {
-		<span class="muted">{ counted(int(route.Deliveries), "delivery") }, only events since { stamp(ctx, route.EventsReceivedFrom) }</span>
+		<span class="muted">{ counted(int(route.Deliveries), "delivery") }, only events since { stamp(ctx, route.EventsRecordedFrom) }</span>
 	} else {
 		<span class="muted">{ counted(int(route.Deliveries), "delivery") }</span>
 	}

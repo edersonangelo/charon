@@ -100,7 +100,7 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 
 		destinations, destErr := q.EnabledDestinationsForEvent(ctx,
 			db.EnabledDestinationsForEventParams{
-				TenantID: event.TenantID, Provider: event.Provider, ReceivedAt: event.ReceivedAt,
+				TenantID: event.TenantID, Provider: event.Provider, EventID: event.ID,
 			})
 		if destErr != nil {
 			return 0, 0, fmt.Errorf("reading destinations for %q: %w", event.Provider, destErr)

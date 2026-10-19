@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/edersonangelo/charon/internal/authz"
 	"github.com/edersonangelo/charon/internal/console"
 	"github.com/edersonangelo/charon/internal/inbound"
@@ -177,12 +179,28 @@ func TestAnEarlierEventNotYetPlannedHoldsTheRoute(t *testing.T) {
 	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
-	now := time.Now()
-	arrivedAt(ctx, t, store, "erp", `{"n":2}`, now)
+	refused, err := store.Record(ctx, inbound.Request{
+		Provider:   "erp",
+		Path:       "/webhooks/erp",
+		ReceivedAt: time.Now().UTC(),
+		Headers:    map[string][]string{"Content-Type": {"application/json"}},
+		Signature:  "invalid",
+		Body:       []byte(`{"n":1}`),
+	})
+	if err != nil {
+		t.Fatalf("recording the refused one: %v", err)
+	}
+	arrivedAt(ctx, t, store, "erp", `{"n":2}`, time.Now())
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
-	arrivedAt(ctx, t, store, "erp", `{"n":1}`, now.Add(-time.Second))
+
+	// Overruling the refusal makes the first one deliverable again, and
+	// unplanned until the next round plans it.
+	who := operatorID(context.Background(), t, store, "late-plan@example.com")
+	if _, err := store.Force(ctx, who, "checked with the sender, it is genuine", []uuid.UUID{refused}); err != nil {
+		t.Fatalf("forcing: %v", err)
+	}
 
 	held, err := store.Claim(ctx, 10, time.Minute)
 	if err != nil {

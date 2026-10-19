@@ -311,8 +311,8 @@ func (q *Queries) DeliveryStateTotals(ctx context.Context, tenantID uuid.UUID) (
 const detailedRoutes = `-- name: DetailedRoutes :many
 select r.id, r.provider, d.id as destination_id, d.name, d.url, d.transport, d.enabled,
        (select count(*) from delivery dl where dl.destination_id = d.id)::bigint as deliveries,
-       (r.events_received_from = '-infinity')::boolean as delivers_recorded,
-       greatest(r.events_received_from, r.created_at)::timestamptz as events_received_from
+       (r.events_recorded_from = '-infinity')::boolean as delivers_recorded,
+       greatest(r.events_recorded_from, r.created_at)::timestamptz as events_recorded_from
 from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1
@@ -329,7 +329,7 @@ type DetailedRoutesRow struct {
 	Enabled            bool
 	Deliveries         int64
 	DeliversRecorded   bool
-	EventsReceivedFrom time.Time
+	EventsRecordedFrom time.Time
 }
 
 func (q *Queries) DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]DetailedRoutesRow, error) {
@@ -351,7 +351,7 @@ func (q *Queries) DetailedRoutes(ctx context.Context, tenantID uuid.UUID) ([]Det
 			&i.Enabled,
 			&i.Deliveries,
 			&i.DeliversRecorded,
-			&i.EventsReceivedFrom,
+			&i.EventsRecordedFrom,
 		); err != nil {
 			return nil, err
 		}

@@ -159,7 +159,7 @@ type Route struct {
 	DestinationID      uuid.UUID
 	CreatedAt          time.Time
 	TenantID           uuid.UUID
-	EventsReceivedFrom time.Time
+	EventsRecordedFrom time.Time
 }
 
 type SchemaMigration struct {

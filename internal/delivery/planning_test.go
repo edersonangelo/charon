@@ -2,8 +2,11 @@ package delivery_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,5 +139,48 @@ func TestARouteThatSkipsWhatWasRecordedDeliversOnlyWhatArrivesAfterIt(t *testing
 	}
 	if got := target.calls.Load(); got != 1 {
 		t.Errorf("the destination was called %d times after coming back, want what it skipped still skipped", got)
+	}
+}
+
+// The instant a request carries is read off the clock of whichever host took
+// it in, and that clock can be wrong. Whether an event came before or after the
+// route is a question of when it was recorded here.
+func TestWhatARouteSkipsDoesNotDependOnTheClockOfTheHostThatTookItIn(t *testing.T) {
+	t.Parallel()
+
+	store := migrated(t)
+	ctx := context.Background()
+
+	var (
+		mu       sync.Mutex
+		accepted []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		accepted = append(accepted, string(payload))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	recordAt(t, store, "stripe", time.Now().Add(time.Hour), `{"before":"on a clock running fast"}`)
+	if err := store.AddRoute(ctx, "stripe", "from-now", server.URL, outbound.HTTP,
+		console.SkipAlreadyRecorded); err != nil {
+		t.Fatalf("adding the route: %v", err)
+	}
+	recordAt(t, store, "stripe", time.Now().Add(-time.Hour), `{"after":"on a clock running slow"}`)
+
+	dispatcher := delivery.New(store, delivery.Config{})
+	for range 3 {
+		if _, err := dispatcher.Tick(ctx); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(accepted, []string{`{"after":"on a clock running slow"}`}) {
+		t.Errorf("the destination accepted %v, want only what was recorded after the route", accepted)
 	}
 }

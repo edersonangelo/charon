@@ -2576,7 +2576,7 @@ func routeDeliveries(route console.RouteRow) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var118 string
-			templ_7745c5c3_Var118, templ_7745c5c3_Err = templ.JoinStringErrs(stamp(ctx, route.EventsReceivedFrom))
+			templ_7745c5c3_Var118, templ_7745c5c3_Err = templ.JoinStringErrs(stamp(ctx, route.EventsRecordedFrom))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/events.templ`, Line: 633, Col: 126}
 			}

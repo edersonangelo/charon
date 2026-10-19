@@ -30,17 +30,17 @@ where id in (
           where ahead.destination_id = dl.destination_id
             and ahead.state = 'pending'
             and arrived_before.provider = e.provider
-            and (arrived_before.received_at, arrived_before.id) < (e.received_at, e.id)
+            and arrived_before.id < e.id
       )
       and not exists (
           select 1 from inbound_event unplanned
           where unplanned.planned_at is null
             and unplanned.provider = e.provider
-            and (unplanned.received_at, unplanned.id) < (e.received_at, e.id)
-            and unplanned.received_at >= (
-                select r.events_received_from from route r
+            and unplanned.id < e.id
+            and recorded_since(unplanned.id, (
+                select r.events_recorded_from from route r
                 where r.provider = e.provider and r.destination_id = dl.destination_id
-            )
+            ))
       )
     order by dl.next_attempt_at
     limit $2
@@ -97,13 +97,13 @@ func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams
 }
 
 const claimUnplannedEvents = `-- name: ClaimUnplannedEvents :many
-select e.id, e.tenant_id, e.provider, e.signature, e.received_at,
+select e.id, e.tenant_id, e.provider, e.signature,
        (e.override_id is not null)::boolean as overridden
 from inbound_event e
 where e.planned_at is null
   and ((e.signature in ('invalid', 'missing') and e.override_id is null)
-       or wanted_by_a_route(e.provider, e.received_at))
-order by e.received_at
+       or wanted_by_a_route(e.provider, e.id))
+order by e.id
 limit $1
 for update skip locked
 `
@@ -113,7 +113,6 @@ type ClaimUnplannedEventsRow struct {
 	TenantID   uuid.UUID
 	Provider   string
 	Signature  string
-	ReceivedAt time.Time
 	Overridden bool
 }
 
@@ -137,7 +136,6 @@ func (q *Queries) ClaimUnplannedEvents(ctx context.Context, limit int32) ([]Clai
 			&i.TenantID,
 			&i.Provider,
 			&i.Signature,
-			&i.ReceivedAt,
 			&i.Overridden,
 		); err != nil {
 			return nil, err
@@ -219,9 +217,10 @@ func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationPa
 }
 
 const createRoute = `-- name: CreateRoute :one
-insert into route (tenant_id, provider, destination_id, events_received_from)
+insert into route (tenant_id, provider, destination_id, events_recorded_from)
 values ($1, $2, $3,
-        case when $4::boolean then '-infinity'::timestamptz else now() end)
+        case when $4::boolean then '-infinity'::timestamptz
+             else date_trunc('milliseconds', now()) end)
 on conflict (tenant_id, provider, destination_id) do nothing
 returning id
 `
@@ -233,6 +232,8 @@ type CreateRouteParams struct {
 	DeliverRecorded bool
 }
 
+// An event's identifier carries its instant to the millisecond, so a route
+// starts on a millisecond too: what is recorded in the same one counts as after.
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, createRoute,
 		arg.TenantID,
@@ -306,18 +307,18 @@ select d.id from route r
 join destination d on d.id = r.destination_id
 where r.tenant_id = $1
   and r.provider = $2
-  and r.events_received_from <= $3
+  and recorded_since($3::uuid, r.events_recorded_from)
   and d.enabled
 `
 
 type EnabledDestinationsForEventParams struct {
-	TenantID   uuid.UUID
-	Provider   string
-	ReceivedAt time.Time
+	TenantID uuid.UUID
+	Provider string
+	EventID  uuid.UUID
 }
 
 func (q *Queries) EnabledDestinationsForEvent(ctx context.Context, arg EnabledDestinationsForEventParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, enabledDestinationsForEvent, arg.TenantID, arg.Provider, arg.ReceivedAt)
+	rows, err := q.db.Query(ctx, enabledDestinationsForEvent, arg.TenantID, arg.Provider, arg.EventID)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +453,7 @@ with next as (
                     where e.planned_at is null
                       and (e.signature in ('unchecked', 'valid')
                            or e.override_id is not null)
-                      and wanted_by_a_route(e.provider, e.received_at)
+                      and wanted_by_a_route(e.provider, e.id)
                 ) then now() end)
     ) as at
 )

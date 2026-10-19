@@ -561,7 +561,7 @@ func (s *Store) DetailedRoutes(ctx context.Context) ([]console.RouteRow, error) 
 			Deliveries:         row.Deliveries,
 			Signing:            signing,
 			AlreadyRecorded:    alreadyRecorded,
-			EventsReceivedFrom: row.EventsReceivedFrom,
+			EventsRecordedFrom: row.EventsRecordedFrom,
 		})
 	}
 	return routes, nil
