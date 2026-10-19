@@ -19,29 +19,11 @@ set leased_until = now() + make_interval(secs => $1::float)
 where id in (
     select dl.id from delivery dl
     join destination d on d.id = dl.destination_id
-    join inbound_event e on e.id = dl.event_id
-    where dl.state = 'pending'
+    where dl.id in (select first_waiting_of_each_route())
+      and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
       and d.enabled
-      and not exists (
-          select 1 from delivery ahead
-          join inbound_event arrived_before on arrived_before.id = ahead.event_id
-          where ahead.destination_id = dl.destination_id
-            and ahead.state = 'pending'
-            and arrived_before.provider = e.provider
-            and arrived_before.id < e.id
-      )
-      and not exists (
-          select 1 from inbound_event unplanned
-          where unplanned.planned_at is null
-            and unplanned.provider = e.provider
-            and unplanned.id < e.id
-            and recorded_since(unplanned.id, (
-                select r.events_recorded_from from route r
-                where r.provider = e.provider and r.destination_id = dl.destination_id
-            ))
-      )
     order by dl.next_attempt_at
     limit $2
     for update of dl skip locked
@@ -67,9 +49,10 @@ type ClaimDeliveriesRow struct {
 // was deliberately taken out of service — which would leave a delivery dead by
 // the time it came back.
 //
-// A dead delivery lets the next one go rather than holding the route forever.
-// An earlier event not yet planned holds it, because another dispatcher may be
-// about to plan it.
+// Only the first waiting delivery of a route is a candidate, so one in flight
+// or waiting out a retry holds the ones behind it. What decides it is checked
+// again on the locked row, which is how two dispatchers never take two from
+// one route.
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, claimDeliveries, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -167,8 +150,8 @@ func (q *Queries) CountEventsAwaitingRoute(ctx context.Context, tenantID uuid.UU
 }
 
 const createDelivery = `-- name: CreateDelivery :exec
-insert into delivery (tenant_id, event_id, destination_id, state, next_attempt_at)
-values ($1, $2, $3, 'pending', now())
+insert into delivery (tenant_id, event_id, destination_id, event_provider, state, next_attempt_at)
+values ($1, $2, $3, $4, 'pending', now())
 on conflict (event_id, destination_id) do nothing
 `
 
@@ -176,10 +159,16 @@ type CreateDeliveryParams struct {
 	TenantID      uuid.UUID
 	EventID       uuid.UUID
 	DestinationID uuid.UUID
+	EventProvider string
 }
 
 func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) error {
-	_, err := q.db.Exec(ctx, createDelivery, arg.TenantID, arg.EventID, arg.DestinationID)
+	_, err := q.db.Exec(ctx, createDelivery,
+		arg.TenantID,
+		arg.EventID,
+		arg.DestinationID,
+		arg.EventProvider,
+	)
 	return err
 }
 
@@ -445,9 +434,10 @@ func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) error {
 const nextWorkAt = `-- name: NextWorkAt :one
 with next as (
     select least(
-        (select min(dl.next_attempt_at) from delivery dl
+        (select min(greatest(dl.next_attempt_at, coalesce(dl.leased_until, dl.next_attempt_at)))
+         from delivery dl
          join destination d on d.id = dl.destination_id
-         where dl.state = 'pending' and d.enabled),
+         where dl.id in (select first_waiting_of_each_route()) and d.enabled),
         (select case when exists (
                     select 1 from inbound_event e
                     where e.planned_at is null
@@ -467,6 +457,9 @@ type NextWorkAtRow struct {
 	Found bool
 }
 
+// Only the first waiting delivery of a route can go, so only it says when there
+// is work. Counting the ones behind it would wake the dispatcher over and over
+// while the first waits out a retry.
 func (q *Queries) NextWorkAt(ctx context.Context) (NextWorkAtRow, error) {
 	row := q.db.QueryRow(ctx, nextWorkAt)
 	var i NextWorkAtRow

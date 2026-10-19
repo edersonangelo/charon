@@ -290,3 +290,39 @@ func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
 		t.Errorf("claimed %v: the route that skips the past delivered it", bodies(claimed))
 	}
 }
+
+func TestTheDispatcherSleepsWhileTheFirstOfARouteWaitsOutItsRetry(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "sleeps")
+
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+	start := time.Now().Add(-time.Minute)
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
+	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+
+	claimed, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claiming: %v (%v)", err, bodies(claimed))
+	}
+	retryAt := time.Now().Add(time.Hour)
+	if err := store.MarkFailed(ctx, claimed[0].Tenant, claimed[0].ID,
+		retryAt, 503, "destination answered 503", 12); err != nil {
+		t.Fatalf("failing: %v", err)
+	}
+
+	at, found, err := store.NextWorkAt(ctx)
+	if err != nil {
+		t.Fatalf("reading the next work time: %v", err)
+	}
+	if !found || at.Before(retryAt.Add(-time.Second)) {
+		t.Errorf("next work at %s (found %v), want the retry at %s: nothing behind it can go before",
+			at, found, retryAt)
+	}
+}

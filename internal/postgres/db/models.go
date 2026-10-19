@@ -39,6 +39,7 @@ type Delivery struct {
 	ReplayCount   int32
 	ReplayedAt    pgtype.Timestamptz
 	TenantID      uuid.UUID
+	EventProvider string
 }
 
 type DeliveryAttempt struct {

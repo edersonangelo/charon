@@ -19,9 +19,10 @@ type Querier interface {
 	// was deliberately taken out of service — which would leave a delivery dead by
 	// the time it came back.
 	//
-	// A dead delivery lets the next one go rather than holding the route forever.
-	// An earlier event not yet planned holds it, because another dispatcher may be
-	// about to plan it.
+	// Only the first waiting delivery of a route is a candidate, so one in flight
+	// or waiting out a retry holds the ones behind it. What decides it is checked
+	// again on the locked row, which is how two dispatchers never take two from
+	// one route.
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered, unless somebody
 	// overruled that deliberately and said why. One that was never checked is
@@ -103,6 +104,9 @@ type Querier interface {
 	MarkSignatureAndReopen(ctx context.Context, arg MarkSignatureAndReopenParams) error
 	MembershipIn(ctx context.Context, arg MembershipInParams) (string, error)
 	Memberships(ctx context.Context, userID uuid.UUID) ([]MembershipsRow, error)
+	// Only the first waiting delivery of a route can go, so only it says when there
+	// is work. Counting the ones behind it would wake the dispatcher over and over
+	// while the first waits out a retry.
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
 	NotifyPanel(ctx context.Context) error
 	NotifyProviders(ctx context.Context) error

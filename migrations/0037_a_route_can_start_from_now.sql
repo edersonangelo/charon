@@ -25,3 +25,33 @@ as $$
         where r.provider = a_provider and recorded_since(a_event, r.events_recorded_from)
     );
 $$;
+
+-- An earlier event the route chose not to take holds nothing.
+create or replace function first_waiting_of_each_route() returns setof uuid
+    language sql stable
+as $$
+    select head.id
+    from (select distinct dl.destination_id, dl.event_provider
+          from delivery dl
+          where dl.state = 'pending') waiting
+    cross join lateral (
+        select dl.id, dl.event_id
+        from delivery dl
+        where dl.destination_id = waiting.destination_id
+          and dl.event_provider = waiting.event_provider
+          and dl.state = 'pending'
+        order by dl.event_id
+        limit 1
+    ) head
+    where not exists (
+        select 1
+        from inbound_event unplanned
+        join route r on r.provider = unplanned.provider
+                    and r.destination_id = waiting.destination_id
+        where unplanned.planned_at is null
+          and unplanned.provider = waiting.event_provider
+          and unplanned.id < head.event_id
+          and (unplanned.signature in ('unchecked', 'valid') or unplanned.override_id is not null)
+          and recorded_since(unplanned.id, r.events_recorded_from)
+    );
+$$;

@@ -218,6 +218,7 @@ func (s *Store) SendTest(ctx context.Context, routeID uuid.UUID) (uuid.UUID, err
 		TenantID:      s.tenantOf(ctx),
 		EventID:       event,
 		DestinationID: route.DestinationID,
+		EventProvider: route.Provider,
 	}); err != nil {
 		return uuid.Nil, fmt.Errorf("planning the test delivery: %w", err)
 	}

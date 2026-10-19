@@ -118,6 +118,7 @@ func (s *Store) planFor(ctx context.Context, batch int) (planned, taken int, err
 				TenantID:      event.TenantID,
 				EventID:       event.ID,
 				DestinationID: destinationID,
+				EventProvider: event.Provider,
 			}); createErr != nil {
 				return 0, 0, fmt.Errorf("creating a delivery for event %s: %w", event.ID, createErr)
 			}
