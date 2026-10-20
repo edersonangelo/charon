@@ -10,7 +10,7 @@ import (
 	"github.com/edersonangelo/charon/internal/postgres"
 )
 
-func claimBodies(ctx context.Context, t *testing.T, store *postgres.Store) []string {
+func claimedInAnyOrder(ctx context.Context, t *testing.T, store *postgres.Store) []string {
 	t.Helper()
 
 	claimed, err := store.Claim(ctx, 10, time.Minute)
@@ -44,7 +44,7 @@ func TestARouteWithNothingToCatchUpOnDeliversSideBySide(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
 		t.Errorf("claimed %v, want both at once: nothing was waiting when the route was made", got)
 	}
 }
@@ -64,7 +64,7 @@ func TestARouteThatSkipsWhatWasRecordedDeliversSideBySide(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(2*time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
 		t.Errorf("claimed %v, want both at once: a route that skips the past has nothing to catch up on", got)
 	}
 }
@@ -83,7 +83,7 @@ func TestWhatArrivesWhileARouteCatchesUpWaitsBehindIt(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
 		t.Errorf("claimed %v, want only what was recorded before the route, with what came after waiting behind it", got)
 	}
 }
@@ -112,7 +112,7 @@ func TestARouteThatCaughtUpDeliversSideBySide(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":3}`, start.Add(2*time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":2}`, `{"n":3}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":2}`, `{"n":3}`}) {
 		t.Errorf("claimed %v, want both at once once the past was delivered", got)
 	}
 }
@@ -141,7 +141,7 @@ func TestADestinationSwitchedBackOnCatchesUpInOrder(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":3}`, start.Add(2*time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
 		t.Errorf("claimed %v, want what waited while it was off delivered in order, first one first", got)
 	}
 }
@@ -176,7 +176,7 @@ func TestACorrectedAddressCatchesUpInOrder(t *testing.T) {
 		t.Fatalf("correcting the address: %v", err)
 	}
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`}) {
 		t.Errorf("claimed %v, want what failed against the wrong address delivered in order, first one first", got)
 	}
 }
@@ -210,7 +210,44 @@ func TestAnOldEventReplayedOnceCaughtUpGoesSideBySide(t *testing.T) {
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
 	plan(ctx, t, store)
 
-	if got := claimBodies(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
 		t.Errorf("claimed %v, want the replay and the newer event side by side", got)
+	}
+}
+
+// Everything the route was given has been delivered, but an event from before
+// it caught up is still waiting to be planned. The route has not caught up: once
+// that event is planned it goes first, and what arrived after waits behind it.
+func TestARouteHasNotCaughtUpWhileItsPastWaitsToBePlanned(t *testing.T) {
+	t.Parallel()
+
+	store, _ := open(t)
+	ctx := inTenant(t, store, "unplanned-past")
+
+	start := time.Now().Add(-time.Minute)
+	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
+	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
+	if _, err := store.Plan(ctx, 1); err != nil {
+		t.Fatalf("planning only the first: %v", err)
+	}
+	first, err := store.Claim(ctx, 10, time.Minute)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("claiming the first: %v (%v)", err, bodies(first))
+	}
+	if err := store.MarkDelivered(ctx, first[0].Tenant, first[0].ID, 200); err != nil {
+		t.Fatalf("marking delivered: %v", err)
+	}
+	if nothing := claimedInAnyOrder(ctx, t, store); len(nothing) != 0 {
+		t.Fatalf("claimed %v with the second still unplanned", nothing)
+	}
+
+	arrivedAt(ctx, t, store, "erp", `{"n":3}`, start.Add(2*time.Second))
+	plan(ctx, t, store)
+
+	if got := claimedInAnyOrder(ctx, t, store); !slices.Equal(got, []string{`{"n":2}`}) {
+		t.Errorf("claimed %v, want the second alone: the route was still catching up on it", got)
 	}
 }

@@ -8,8 +8,10 @@
 alter table route add column catching_up_to timestamptz;
 
 -- A route already working through what was waiting goes on doing it in order:
--- switching it to side by side halfway would send the rest out of order. Each
--- tenant is visited as itself, so the policies decide what this reads.
+-- switching it to side by side halfway would send the rest out of order. What
+-- it is working through includes what planning has not reached yet, read the
+-- way MarkRoutesCaughtUp reads it. Each tenant is visited as itself, so the
+-- policies decide what this reads.
 do $$
 declare
     each_tenant uuid;
@@ -19,15 +21,29 @@ begin
         update route r
         set catching_up_to = date_trunc('milliseconds', now()) + interval '1 millisecond'
         where r.tenant_id = each_tenant
-          and exists (
-              select 1 from delivery dl
-              where dl.tenant_id = each_tenant and dl.state = 'pending'
-                and dl.destination_id = r.destination_id and dl.event_provider = r.provider
-          );
+          and (exists (
+                   select 1 from delivery dl
+                   where dl.tenant_id = each_tenant and dl.state = 'pending'
+                     and dl.destination_id = r.destination_id and dl.event_provider = r.provider
+               )
+               or exists (
+                   select 1 from inbound_event unplanned
+                   where unplanned.tenant_id = each_tenant
+                     and unplanned.provider = r.provider
+                     and unplanned.planned_at is null
+                     and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+                     and (unplanned.signature in ('unchecked', 'valid') or unplanned.override_id is not null)
+               ));
     end loop;
     perform set_config('charon.tenant', '', true);
 end;
 $$;
+
+-- Every claim asks which routes have caught up, and almost always none is
+-- catching up.
+create index route_catching_up_idx
+    on route (tenant_id)
+    where catching_up_to is not null;
 
 create index delivery_due_on_route_idx
     on delivery (tenant_id, destination_id, event_provider, next_attempt_at)
@@ -38,12 +54,16 @@ drop function first_waiting_of_each_route();
 -- The deliveries that may go, route by route. A route catching up offers only
 -- its first waiting delivery, in the order its events were recorded, and only
 -- with nothing in flight: one in flight holds the route even when a replay has
--- put an older one ahead of it. Any other route offers whatever is due by
--- due_by, earliest first, up to per_route of them.
+-- put an older one ahead of it. That one is offered whether or not it is due,
+-- so that the caller decides: claiming wants it only when due, waking wants to
+-- know when it will be. Any other route offers whatever is due by due_by,
+-- earliest first, up to per_route of them.
 --
--- The routes are found by stepping through the index one route at a time, so
--- the work is the number of routes with something waiting, not the number of
--- deliveries waiting.
+-- The routes are found by stepping through the index one route at a time, and
+-- each reads at most per_route of its own, so the work is bounded by the routes
+-- with something waiting times per_route, however long a backlog one of them
+-- is catching up on. Reading the due deliveries of every route in one pass
+-- instead would read through every backlog being caught up on, on every claim.
 --
 -- A route catching up is held while an earlier event it wants is not planned
 -- yet, because a dispatcher running beside this one may be about to plan it.
@@ -102,6 +122,7 @@ begin
            )
            -- Asked per route rather than joined, so it reads only the range
            -- between where the route starts and its first waiting delivery.
+           -- What counts as wanted is what MarkRoutesCaughtUp counts.
            and not (select exists (
                select 1
                from inbound_event unplanned

@@ -556,7 +556,8 @@ where r.tenant_id = current_tenant()
 // A route has caught up once nothing from before the instant it catches up to
 // still waits: not delivered, and not yet planned either. From then on it
 // delivers side by side, and an old event replayed later goes on its own
-// instead of putting the route back in order.
+// instead of putting the route back in order. What counts as wanted and not
+// yet planned is what deliveries_free_to_go counts.
 func (q *Queries) MarkRoutesCaughtUp(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, markRoutesCaughtUp)
 	return err

@@ -118,7 +118,8 @@ where tenant_id = sqlc.arg(tenant_id) and destination_id = sqlc.arg(destination_
 -- A route has caught up once nothing from before the instant it catches up to
 -- still waits: not delivered, and not yet planned either. From then on it
 -- delivers side by side, and an old event replayed later goes on its own
--- instead of putting the route back in order.
+-- instead of putting the route back in order. What counts as wanted and not
+-- yet planned is what deliveries_free_to_go counts.
 -- name: MarkRoutesCaughtUp :exec
 update route r
 set catching_up_to = null

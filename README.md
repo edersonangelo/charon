@@ -319,10 +319,10 @@ build step and no external assets. Sign in with an operator created by
   use is not drawn, and the route behind it refuses anyway.
 - **Replay** a single delivery or every delivery of an event. A replay resets
   the delivery to pending and announces it, so it is picked up immediately. It
-  does not erase the attempt history, and it unplans the event so a route added
-  since is included. On a route catching up, a replayed event keeps its place in
-  the order of arrival, so it goes ahead of anything newer still waiting there.
-  On any other route it goes at once.
+  does not erase the attempt history. Replaying every delivery of an event also
+  unplans it, so a route added since is included. On a route catching up, a
+  replayed event keeps its place in the order of arrival, so it goes ahead of
+  anything newer still waiting there. On any other route it goes at once.
 
 Replaying is a real redelivery, not a simulation. The destination will receive
 the event again, which is the same situation described below.

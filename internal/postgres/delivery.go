@@ -220,8 +220,9 @@ func (s *Store) claimFor(
 
 // A route that has caught up is told so before anything can bring back an
 // older event, or the route would go back to delivering in order for it.
-// Planning shares the hold: a route given a past to deliver while this looks
-// would otherwise be read before its deliveries existed, and cleared.
+// The hold is the one planning shares, and it keeps out only a change to the
+// routes, which takes it alone: a route given a past to deliver while this
+// looks would otherwise be read before its deliveries existed, and cleared.
 func (s *Store) markRoutesCaughtUp(ctx context.Context) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
