@@ -15,7 +15,7 @@ import (
 	"github.com/edersonangelo/charon/internal/outbound"
 )
 
-func TestARouteDeliversInTheOrderItsEventsArrivedThroughARetry(t *testing.T) {
+func TestARouteCatchingUpDeliversInTheOrderItsEventsArrivedThroughARetry(t *testing.T) {
 	t.Parallel()
 
 	store := migrated(t)
@@ -40,14 +40,14 @@ func TestARouteDeliversInTheOrderItsEventsArrivedThroughARetry(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
+	start := time.Now().Add(-time.Minute)
+	want := []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}
+	recordAt(t, store, "stripe", start, want[0])
+	recordAt(t, store, "stripe", start.Add(time.Second), want[1])
 	if err := store.AddRoute(ctx, "stripe", "ordered", server.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("adding the route: %v", err)
 	}
-	start := time.Now().Add(-time.Minute)
-	want := []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}
-	for n, payload := range want {
-		recordAt(t, store, "stripe", start.Add(time.Duration(n)*time.Second), payload)
-	}
+	recordAt(t, store, "stripe", start.Add(2*time.Second), want[2])
 
 	dispatcher := delivery.New(store, delivery.Config{
 		BackoffBase: time.Millisecond,
@@ -64,6 +64,53 @@ func TestARouteDeliversInTheOrderItsEventsArrivedThroughARetry(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !slices.Equal(accepted, want) {
-		t.Errorf("the destination accepted %v, want %v: the first was refused once and the rest waited for it", accepted, want)
+		t.Errorf("the destination accepted %v, want %v: the first was refused once and the rest, "+
+			"recorded before the route and after it, waited for it", accepted, want)
+	}
+}
+
+func TestARouteWithNothingToCatchUpOnDoesNotHoldWhatIsBehindARetry(t *testing.T) {
+	t.Parallel()
+
+	store := migrated(t)
+	ctx := context.Background()
+
+	var (
+		mu       sync.Mutex
+		accepted []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		if string(payload) == `{"n":1}` {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		mu.Lock()
+		accepted = append(accepted, string(payload))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := store.AddRoute(ctx, "stripe", "side-by-side", server.URL, outbound.HTTP, console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("adding the route: %v", err)
+	}
+	start := time.Now().Add(-time.Minute)
+	recordAt(t, store, "stripe", start, `{"n":1}`)
+	recordAt(t, store, "stripe", start.Add(time.Second), `{"n":2}`)
+
+	dispatcher := delivery.New(store, delivery.Config{BackoffBase: time.Hour, BackoffCap: time.Hour})
+	deadline := time.Now().Add(5 * time.Second)
+	for states(t, store)["delivered"] < 1 && time.Now().Before(deadline) {
+		if _, err := dispatcher.Tick(ctx); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(accepted, []string{`{"n":2}`}) {
+		t.Errorf("the destination accepted %v, want the second delivered while the first waits an hour for its retry", accepted)
 	}
 }

@@ -477,6 +477,10 @@ func (s *Store) ReplayEvent(ctx context.Context, eventID uuid.UUID) (int64, erro
 }
 
 func (s *Store) replay(ctx context.Context, apply func(*db.Queries) (int64, error)) (int64, error) {
+	if err := s.markRoutesCaughtUp(ctx); err != nil {
+		return 0, err
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("beginning the replay transaction: %w", err)
@@ -609,6 +613,17 @@ func (s *Store) SaveRoute(ctx context.Context, routeID uuid.UUID, url string, en
 			if err := q.NotifyWork(ctx); err != nil {
 				return fmt.Errorf("announcing the waiting deliveries: %w", err)
 			}
+		}
+	}
+
+	// Both hand the destination a past at once: what waited while it was off,
+	// or what was failing against the wrong address. It goes in order, and
+	// what arrives meanwhile waits behind it.
+	if url != route.Url || (enabled && !route.Enabled) {
+		if err := q.CatchUpRoutesOfDestination(ctx, db.CatchUpRoutesOfDestinationParams{
+			TenantID: s.tenantOf(ctx), DestinationID: route.DestinationID,
+		}); err != nil {
+			return fmt.Errorf("putting the routes of %q in order: %w", route.Name, err)
 		}
 	}
 

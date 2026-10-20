@@ -13,6 +13,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const catchUpRoutesOfDestination = `-- name: CatchUpRoutesOfDestination :exec
+update route
+set catching_up_to = date_trunc('milliseconds', now()) + interval '1 millisecond'
+where tenant_id = $1 and destination_id = $2
+`
+
+type CatchUpRoutesOfDestinationParams struct {
+	TenantID      uuid.UUID
+	DestinationID uuid.UUID
+}
+
+// Somebody gave these routes a past to deliver: what waits for the destination
+// now goes in order, and what arrives meanwhile waits behind it.
+func (q *Queries) CatchUpRoutesOfDestination(ctx context.Context, arg CatchUpRoutesOfDestinationParams) error {
+	_, err := q.db.Exec(ctx, catchUpRoutesOfDestination, arg.TenantID, arg.DestinationID)
+	return err
+}
+
 const claimDeliveries = `-- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => $1::float)
@@ -20,7 +38,7 @@ where id in (
     select dl.id
     from delivery dl
     join destination d on d.id = dl.destination_id
-    where dl.id = any (array(select first_waiting_of_each_route()))
+    where dl.id = any (array(select deliveries_free_to_go(now(), $2::int)))
       and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
@@ -50,10 +68,10 @@ type ClaimDeliveriesRow struct {
 // was deliberately taken out of service — which would leave a delivery dead by
 // the time it came back.
 //
-// Only the first waiting delivery of a route is a candidate, so one in flight
+// A route catching up offers only its first waiting delivery, so one in flight
 // or waiting out a retry holds the ones behind it. What decides it is checked
-// again on the locked row, which is how two dispatchers never take two from
-// one route.
+// again on the locked row, which is how two dispatchers never take two from a
+// route catching up.
 func (q *Queries) ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error) {
 	rows, err := q.db.Query(ctx, claimDeliveries, arg.LeaseSeconds, arg.BatchSize)
 	if err != nil {
@@ -228,10 +246,12 @@ func (q *Queries) CreateDestination(ctx context.Context, arg CreateDestinationPa
 }
 
 const createRoute = `-- name: CreateRoute :one
-insert into route (tenant_id, provider, destination_id, events_recorded_from)
+insert into route (tenant_id, provider, destination_id, events_recorded_from, catching_up_to)
 values ($1, $2, $3,
         case when $4::boolean then '-infinity'::timestamptz
-             else date_trunc('milliseconds', now()) end)
+             else date_trunc('milliseconds', now()) end,
+        case when $4::boolean
+             then date_trunc('milliseconds', now()) + interval '1 millisecond' end)
 on conflict (tenant_id, provider, destination_id) do nothing
 returning id
 `
@@ -245,6 +265,8 @@ type CreateRouteParams struct {
 
 // An event's identifier carries its instant to the millisecond, so a route
 // starts on a millisecond too: what is recorded in the same one counts as after.
+// Catching up ends on the millisecond after, so nothing recorded alongside the
+// choice is left out of the order.
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, createRoute,
 		arg.TenantID,
@@ -509,15 +531,47 @@ func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) error {
 	return err
 }
 
+const markRoutesCaughtUp = `-- name: MarkRoutesCaughtUp :exec
+update route r
+set catching_up_to = null
+where r.tenant_id = current_tenant()
+  and r.catching_up_to is not null
+  and not exists (
+      select 1 from delivery dl
+      where dl.tenant_id = current_tenant() and dl.state = 'pending'
+        and dl.destination_id = r.destination_id and dl.event_provider = r.provider
+        and dl.event_id < first_id_recorded_at(r.catching_up_to)
+  )
+  and not exists (
+      select 1 from inbound_event unplanned
+      where unplanned.tenant_id = current_tenant()
+        and unplanned.provider = r.provider
+        and unplanned.planned_at is null
+        and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+        and unplanned.id < first_id_recorded_at(r.catching_up_to)
+        and (unplanned.signature in ('unchecked', 'valid') or unplanned.override_id is not null)
+  )
+`
+
+// A route has caught up once nothing from before the instant it catches up to
+// still waits: not delivered, and not yet planned either. From then on it
+// delivers side by side, and an old event replayed later goes on its own
+// instead of putting the route back in order.
+func (q *Queries) MarkRoutesCaughtUp(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, markRoutesCaughtUp)
+	return err
+}
+
 const nextWorkAt = `-- name: NextWorkAt :one
 with next as (
     select least(
         (select min(dl.next_attempt_at)
          from delivery dl
          join destination d on d.id = dl.destination_id and d.enabled
-         where dl.id = any (array(select first_waiting_of_each_route()))),
-        -- A route in flight holds what is behind it until the attempt is
-        -- recorded, or until its lease runs out because the worker died.
+         where dl.id = any (array(select deliveries_free_to_go('infinity', 1)))),
+        -- What is in flight holds a route catching up until the attempt is
+        -- recorded, and is claimed again when its lease runs out because the
+        -- worker died.
         (select min(flying.leased_until)
          from delivery flying
          join destination d on d.id = flying.destination_id and d.enabled
@@ -553,8 +607,8 @@ type NextWorkAtRow struct {
 	Found bool
 }
 
-// Only the first waiting delivery of a route can go, so only it says when there
-// is work. Counting the ones behind it would wake the dispatcher over and over
+// Only what may go says when there is work. Counting what waits behind the
+// first delivery of a route catching up would wake the dispatcher over and over
 // while the first waits out a retry.
 func (q *Queries) NextWorkAt(ctx context.Context) (NextWorkAtRow, error) {
 	row := q.db.QueryRow(ctx, nextWorkAt)

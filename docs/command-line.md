@@ -147,8 +147,10 @@ charon route list
 
 `-already-recorded` has no default. `deliver` sends every event the provider has
 already sent, which can be thousands of requests to a destination that did not
-expect them. `skip` sends only what arrives from now on. The panel asks the same
-question.
+expect them. They go in the order they arrived, one at a time, and what arrives
+meanwhile waits behind them; once they are through, the route delivers side by
+side. `skip` sends only what arrives from now on, side by side from the start.
+The panel asks the same question.
 
 An address is refused here as it is in the panel: it has to parse, have a host,
 and be `http` or `https`. Nothing is said about the path — a trailing slash is a
@@ -159,13 +161,15 @@ addresses things, and this rule leaves it alone.
 Correcting a destination's address tries what is waiting for it at once, with
 its attempts back: what failed against an address that was wrong did not fail
 against the destination, and a backoff earned by a typo is not worth serving
-out. Saving without changing the address leaves the backoff alone, because a
+out. It is tried in the order it arrived, one at a time, until it has caught
+up. Saving without changing the address leaves the backoff alone, because a
 destination that is genuinely down has earned it.
 
 Switching a destination off pauses it. Nothing new is routed there, and what is
 already waiting keeps waiting with its attempts intact rather than being spent
 against somewhere deliberately taken out of service. Switching it back on
-delivers both what was held and everything that arrived meanwhile.
+delivers both what was held and everything that arrived meanwhile, in the order
+it arrived, one at a time, until it has caught up.
 
 A delivery that already reached the attempt limit is dead and stays dead; the
 resend button on the routes page is how that comes back.

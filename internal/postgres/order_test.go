@@ -47,21 +47,21 @@ func bodies(claimed []outbound.Delivery) []string {
 	return got
 }
 
-func TestOnlyTheFirstWaitingDeliveryOfARouteIsClaimed(t *testing.T) {
+func TestARouteCatchingUpOffersOnlyItsFirstWaitingDelivery(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "in-order")
 
+	start := time.Now().Add(-time.Minute)
+	arrivedAt(ctx, t, store, "erp", `{"erp":1}`, start)
+	arrivedAt(ctx, t, store, "erp", `{"erp":2}`, start.Add(time.Second))
+	arrivedAt(ctx, t, store, "crm", `{"crm":1}`, start.Add(2*time.Second))
 	for _, provider := range []string{"erp", "crm"} {
 		if err := store.AddRoute(ctx, provider, "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 			t.Fatalf("routing %s: %v", provider, err)
 		}
 	}
-	start := time.Now().Add(-time.Minute)
-	arrivedAt(ctx, t, store, "erp", `{"erp":1}`, start)
-	arrivedAt(ctx, t, store, "erp", `{"erp":2}`, start.Add(time.Second))
-	arrivedAt(ctx, t, store, "crm", `{"crm":1}`, start.Add(2*time.Second))
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
@@ -102,18 +102,18 @@ func TestOnlyTheFirstWaitingDeliveryOfARouteIsClaimed(t *testing.T) {
 	}
 }
 
-func TestOneWaitingOutARetryHoldsTheOnesBehindIt(t *testing.T) {
+func TestWhileARouteCatchesUpOneWaitingOutARetryHoldsTheOnesBehindIt(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "held")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	start := time.Now().Add(-time.Minute)
 	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
@@ -136,18 +136,18 @@ func TestOneWaitingOutARetryHoldsTheOnesBehindIt(t *testing.T) {
 	}
 }
 
-func TestADeadDeliveryLetsTheNextOneGo(t *testing.T) {
+func TestWhileARouteCatchesUpADeadDeliveryLetsTheNextOneGo(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "dead-ahead")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	start := time.Now().Add(-time.Minute)
 	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
@@ -170,15 +170,12 @@ func TestADeadDeliveryLetsTheNextOneGo(t *testing.T) {
 	}
 }
 
-func TestAnEarlierEventNotYetPlannedHoldsTheRoute(t *testing.T) {
+func TestAnEarlierEventNotYetPlannedHoldsARouteCatchingUp(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "late-plan")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	refused, err := store.Record(ctx, inbound.Request{
 		Provider:   "erp",
 		Path:       "/webhooks/erp",
@@ -191,6 +188,9 @@ func TestAnEarlierEventNotYetPlannedHoldsTheRoute(t *testing.T) {
 		t.Fatalf("recording the refused one: %v", err)
 	}
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, time.Now())
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
@@ -222,18 +222,18 @@ func TestAnEarlierEventNotYetPlannedHoldsTheRoute(t *testing.T) {
 	}
 }
 
-func TestTwoDispatchersNeverTakeTwoFromOneRoute(t *testing.T) {
+func TestTwoDispatchersNeverTakeTwoFromARouteCatchingUp(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "side-by-side")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	start := time.Now().Add(-time.Minute)
 	for n := range 5 {
 		arrivedAt(ctx, t, store, "erp", `{}`, start.Add(time.Duration(n)*time.Second))
+	}
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
 	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
@@ -263,18 +263,18 @@ func TestTwoDispatchersNeverTakeTwoFromOneRoute(t *testing.T) {
 	}
 }
 
-func TestTheDispatcherSleepsWhileTheFirstOfARouteWaitsOutItsRetry(t *testing.T) {
+func TestTheDispatcherSleepsWhileTheFirstOfARouteCatchingUpWaitsOutItsRetry(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "sleeps")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	start := time.Now().Add(-time.Minute)
 	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestTheDispatcherSleepsWhileTheFirstOfARouteWaitsOutItsRetry(t *testing.T) 
 	}
 }
 
-func TestANewRouteDoesNotHoldUpTheProvidersOtherRoutes(t *testing.T) {
+func TestANewRouteCatchingUpDoesNotHoldUpTheProvidersOtherRoutes(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
@@ -315,31 +315,36 @@ func TestANewRouteDoesNotHoldUpTheProvidersOtherRoutes(t *testing.T) {
 		t.Fatalf("planning: %v", err)
 	}
 	delivered, err := store.Claim(ctx, 10, time.Minute)
-	if err != nil || len(delivered) != 1 {
+	if err != nil || len(delivered) != 2 {
 		t.Fatalf("claiming: %v (%v)", err, bodies(delivered))
 	}
-	if err := store.MarkDelivered(ctx, delivered[0].Tenant, delivered[0].ID, 200); err != nil {
-		t.Fatalf("marking delivered: %v", err)
+	for _, delivery := range delivered {
+		if err := store.MarkDelivered(ctx, delivery.Tenant, delivery.ID, 200); err != nil {
+			t.Fatalf("marking delivered: %v", err)
+		}
 	}
 
 	if err := store.AddRoute(ctx, "erp", "second", "https://second.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
 		t.Fatalf("routing to the second: %v", err)
+	}
+	arrivedAt(ctx, t, store, "erp", `{"n":3}`, start.Add(2*time.Second))
+	if _, err := store.Plan(ctx, 10); err != nil {
+		t.Fatalf("planning the third: %v", err)
 	}
 
 	claimed, err := store.Claim(ctx, 10, time.Minute)
 	if err != nil {
 		t.Fatalf("claiming after the second route: %v", err)
 	}
-	got := map[string]string{}
+	got := map[string][]string{}
 	for _, delivery := range claimed {
-		got[delivery.URL] = string(delivery.Body)
+		got[delivery.URL] = append(got[delivery.URL], string(delivery.Body))
 	}
-	if got["https://first.example/h"] != `{"n":2}` {
-		t.Errorf("the first route claimed %q, want its next event without waiting on the second route's past",
-			got["https://first.example/h"])
+	if first := got["https://first.example/h"]; len(first) != 1 || first[0] != `{"n":3}` {
+		t.Errorf("the first route claimed %v, want its next event without waiting on the second route's past", first)
 	}
-	if got["https://second.example/h"] != `{"n":1}` {
-		t.Errorf("the second route claimed %q, want the first event it was given", got["https://second.example/h"])
+	if second := got["https://second.example/h"]; len(second) != 1 || second[0] != `{"n":1}` {
+		t.Errorf("the second route claimed %v, want only the first event of what it is catching up on", second)
 	}
 }
 
@@ -371,18 +376,18 @@ func TestRoutingAProviderToADestinationItAlreadyReachesIsRefused(t *testing.T) {
 	}
 }
 
-func TestAReplayWaitsForWhatIsAlreadyInFlightOnItsRoute(t *testing.T) {
+func TestAReplayWaitsForWhatIsAlreadyInFlightOnARouteCatchingUp(t *testing.T) {
 	t.Parallel()
 
 	store, _ := open(t)
 	ctx := inTenant(t, store, "replay-waits")
 
-	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
-		t.Fatalf("routing: %v", err)
-	}
 	start := time.Now().Add(-time.Minute)
 	arrivedAt(ctx, t, store, "erp", `{"n":1}`, start)
 	arrivedAt(ctx, t, store, "erp", `{"n":2}`, start.Add(time.Second))
+	if err := store.AddRoute(ctx, "erp", "sink", "https://sink.example/h", "http", console.DeliverAlreadyRecorded); err != nil {
+		t.Fatalf("routing: %v", err)
+	}
 	if _, err := store.Plan(ctx, 10); err != nil {
 		t.Fatalf("planning: %v", err)
 	}

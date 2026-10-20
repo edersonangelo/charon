@@ -161,6 +161,7 @@ type Route struct {
 	CreatedAt          time.Time
 	TenantID           uuid.UUID
 	EventsRecordedFrom time.Time
+	CatchingUpTo       pgtype.Timestamptz
 }
 
 type SchemaMigration struct {

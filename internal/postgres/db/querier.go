@@ -14,15 +14,18 @@ import (
 type Querier interface {
 	AddSigningSecret(ctx context.Context, arg AddSigningSecretParams) error
 	AttemptTotals(ctx context.Context, tenantID uuid.UUID) ([]AttemptTotalsRow, error)
+	// Somebody gave these routes a past to deliver: what waits for the destination
+	// now goes in order, and what arrives meanwhile waits behind it.
+	CatchUpRoutesOfDestination(ctx context.Context, arg CatchUpRoutesOfDestinationParams) error
 	// Switching a destination off pauses it. What is already waiting for it stays
 	// waiting, keeping its attempts, instead of being spent against somewhere that
 	// was deliberately taken out of service — which would leave a delivery dead by
 	// the time it came back.
 	//
-	// Only the first waiting delivery of a route is a candidate, so one in flight
+	// A route catching up offers only its first waiting delivery, so one in flight
 	// or waiting out a retry holds the ones behind it. What decides it is checked
-	// again on the locked row, which is how two dispatchers never take two from
-	// one route.
+	// again on the locked row, which is how two dispatchers never take two from a
+	// route catching up.
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
 	// A signature that was checked and failed is never delivered, unless somebody
 	// overruled that deliberately and said why. One that was never checked is
@@ -50,6 +53,8 @@ type Querier interface {
 	CreatePanelUser(ctx context.Context, arg CreatePanelUserParams) (uuid.UUID, error)
 	// An event's identifier carries its instant to the millisecond, so a route
 	// starts on a millisecond too: what is recorded in the same one counts as after.
+	// Catching up ends on the millisecond after, so nothing recorded alongside the
+	// choice is left out of the order.
 	CreateRoute(ctx context.Context, arg CreateRouteParams) (uuid.UUID, error)
 	CreateSSOUser(ctx context.Context, arg CreateSSOUserParams) (PanelUser, error)
 	CreateSystemAdmin(ctx context.Context, arg CreateSystemAdminParams) error
@@ -122,12 +127,17 @@ type Querier interface {
 	MarkDelivered(ctx context.Context, arg MarkDeliveredParams) error
 	MarkEventPlanned(ctx context.Context, id uuid.UUID) error
 	MarkFailed(ctx context.Context, arg MarkFailedParams) error
+	// A route has caught up once nothing from before the instant it catches up to
+	// still waits: not delivered, and not yet planned either. From then on it
+	// delivers side by side, and an old event replayed later goes on its own
+	// instead of putting the route back in order.
+	MarkRoutesCaughtUp(ctx context.Context) error
 	MarkSignature(ctx context.Context, arg MarkSignatureParams) error
 	MarkSignatureAndReopen(ctx context.Context, arg MarkSignatureAndReopenParams) error
 	MembershipIn(ctx context.Context, arg MembershipInParams) (string, error)
 	Memberships(ctx context.Context, userID uuid.UUID) ([]MembershipsRow, error)
-	// Only the first waiting delivery of a route can go, so only it says when there
-	// is work. Counting the ones behind it would wake the dispatcher over and over
+	// Only what may go says when there is work. Counting what waits behind the
+	// first delivery of a route catching up would wake the dispatcher over and over
 	// while the first waits out a retry.
 	NextWorkAt(ctx context.Context) (NextWorkAtRow, error)
 	NotifyPanel(ctx context.Context) error

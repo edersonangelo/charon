@@ -172,6 +172,10 @@ func (s *Store) Claim(
 func (s *Store) claimFor(
 	ctx context.Context, tenant uuid.UUID, batch int, lease time.Duration,
 ) ([]outbound.Delivery, error) {
+	if err := s.markRoutesCaughtUp(ctx); err != nil {
+		return nil, err
+	}
+
 	claimed, err := s.q.ClaimDeliveries(ctx, db.ClaimDeliveriesParams{
 		LeaseSeconds: lease.Seconds(),
 		BatchSize:    int32(batch), //nolint:gosec // batch is small
@@ -212,6 +216,31 @@ func (s *Store) claimFor(
 		})
 	}
 	return deliveries, nil
+}
+
+// A route that has caught up is told so before anything can bring back an
+// older event, or the route would go back to delivering in order for it.
+// Planning shares the hold: a route given a past to deliver while this looks
+// would otherwise be read before its deliveries existed, and cleared.
+func (s *Store) markRoutesCaughtUp(ctx context.Context) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning to mark routes caught up: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := s.q.WithTx(tx)
+
+	if err := q.HoldRoutesForPlanning(ctx, s.tenantOf(ctx)); err != nil {
+		return fmt.Errorf("waiting for routes being changed: %w", err)
+	}
+	if err := q.MarkRoutesCaughtUp(ctx); err != nil {
+		return fmt.Errorf("marking routes caught up: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing routes caught up: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) MarkDelivered(ctx context.Context, tenant, id uuid.UUID, status int) error {
