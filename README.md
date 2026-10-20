@@ -259,12 +259,18 @@ happens to it: `deliver` sends everything the provider has already sent, and
 delivering the past can be thousands of requests to a destination that did not
 expect them.
 
-A route delivers its events in the order they arrived, one at a time: the next
-one goes only when the one before it was delivered or gave up. A delivery
-waiting out a retry holds the ones behind it. One that reaches the attempt limit
-lets the next go and stays in the panel to be replayed. Routes do not wait for
-each other, so two providers sent to the same destination go side by side. A
-long backlog to one route is delivered one request per dispatch round.
+A route delivers side by side: each event goes as soon as it is due, and one
+waiting out a retry holds nobody. A route catches up in order whenever somebody
+hands it a past to deliver: a new route told to `deliver`, a destination switched
+back on, or an address corrected. While it catches up, the next event goes only
+once the one before it was delivered or gave up, a delivery waiting out a retry
+holds the ones behind it, and what arrives meanwhile waits behind the past, so
+the destination sees everything in the order it arrived. One that reaches the
+attempt limit lets the next go and stays in the panel to be replayed. Once
+nothing from before that moment waits, the route goes back to side by side.
+Routes do not wait for each other, so two providers sent to the same destination
+go side by side. A route catching up is delivered one request per dispatch
+round.
 
 ## Delivery
 
@@ -313,9 +319,10 @@ build step and no external assets. Sign in with an operator created by
   use is not drawn, and the route behind it refuses anyway.
 - **Replay** a single delivery or every delivery of an event. A replay resets
   the delivery to pending and announces it, so it is picked up immediately. It
-  does not erase the attempt history, and it unplans the event so a route added
-  since is included. A replayed event keeps its place in the order of arrival,
-  so it goes ahead of anything newer still waiting on the same route.
+  does not erase the attempt history. Replaying every delivery of an event also
+  unplans it, so a route added since is included. On a route catching up, a
+  replayed event keeps its place in the order of arrival, so it goes ahead of
+  anything newer still waiting there. On any other route it goes at once.
 
 Replaying is a real redelivery, not a simulation. The destination will receive
 the event again, which is the same situation described below.

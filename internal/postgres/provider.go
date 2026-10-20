@@ -299,6 +299,10 @@ func (s *Store) Recheck(
 		return 0, fmt.Errorf("verification settings of %q: %w", name, err)
 	}
 
+	if err := s.markRoutesCaughtUp(ctx); err != nil {
+		return 0, err
+	}
+
 	events, err := s.q.UnverifiedEvents(ctx, db.UnverifiedEventsParams{
 		TenantID: s.tenantOf(ctx),
 		Provider: name, Limit: batch,

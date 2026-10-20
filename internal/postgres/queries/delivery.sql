@@ -8,11 +8,15 @@ select * from destination where tenant_id = $1 and name = $2;
 
 -- An event's identifier carries its instant to the millisecond, so a route
 -- starts on a millisecond too: what is recorded in the same one counts as after.
+-- Catching up ends on the millisecond after, so nothing recorded alongside the
+-- choice is left out of the order.
 -- name: CreateRoute :one
-insert into route (tenant_id, provider, destination_id, events_recorded_from)
+insert into route (tenant_id, provider, destination_id, events_recorded_from, catching_up_to)
 values ($1, $2, $3,
         case when sqlc.arg(deliver_recorded)::boolean then '-infinity'::timestamptz
-             else date_trunc('milliseconds', now()) end)
+             else date_trunc('milliseconds', now()) end,
+        case when sqlc.arg(deliver_recorded)::boolean
+             then date_trunc('milliseconds', now()) + interval '1 millisecond' end)
 on conflict (tenant_id, provider, destination_id) do nothing
 returning id;
 
@@ -104,6 +108,39 @@ select pg_advisory_xact_lock_shared(2, hashtext(sqlc.arg(tenant_id)::uuid::text)
 -- name: HoldRoutesForChange :exec
 select pg_advisory_xact_lock(2, hashtext(sqlc.arg(tenant_id)::uuid::text));
 
+-- Somebody gave these routes a past to deliver: what waits for the destination
+-- now goes in order, and what arrives meanwhile waits behind it.
+-- name: CatchUpRoutesOfDestination :exec
+update route
+set catching_up_to = date_trunc('milliseconds', now()) + interval '1 millisecond'
+where tenant_id = sqlc.arg(tenant_id) and destination_id = sqlc.arg(destination_id);
+
+-- A route has caught up once nothing from before the instant it catches up to
+-- still waits: not delivered, and not yet planned either. From then on it
+-- delivers side by side, and an old event replayed later goes on its own
+-- instead of putting the route back in order. What counts as wanted and not
+-- yet planned is what deliveries_free_to_go counts.
+-- name: MarkRoutesCaughtUp :exec
+update route r
+set catching_up_to = null
+where r.tenant_id = current_tenant()
+  and r.catching_up_to is not null
+  and not exists (
+      select 1 from delivery dl
+      where dl.tenant_id = current_tenant() and dl.state = 'pending'
+        and dl.destination_id = r.destination_id and dl.event_provider = r.provider
+        and dl.event_id < first_id_recorded_at(r.catching_up_to)
+  )
+  and not exists (
+      select 1 from inbound_event unplanned
+      where unplanned.tenant_id = current_tenant()
+        and unplanned.provider = r.provider
+        and unplanned.planned_at is null
+        and unplanned.id >= first_id_recorded_at(r.events_recorded_from)
+        and unplanned.id < first_id_recorded_at(r.catching_up_to)
+        and (unplanned.signature in ('unchecked', 'valid') or unplanned.override_id is not null)
+  );
+
 -- name: MarkEventPlanned :exec
 update inbound_event set planned_at = now() where id = $1;
 
@@ -112,10 +149,10 @@ update inbound_event set planned_at = now() where id = $1;
 -- was deliberately taken out of service — which would leave a delivery dead by
 -- the time it came back.
 --
--- Only the first waiting delivery of a route is a candidate, so one in flight
+-- A route catching up offers only its first waiting delivery, so one in flight
 -- or waiting out a retry holds the ones behind it. What decides it is checked
--- again on the locked row, which is how two dispatchers never take two from
--- one route.
+-- again on the locked row, which is how two dispatchers never take two from a
+-- route catching up.
 -- name: ClaimDeliveries :many
 update delivery
 set leased_until = now() + make_interval(secs => sqlc.arg(lease_seconds)::float)
@@ -123,7 +160,7 @@ where id in (
     select dl.id
     from delivery dl
     join destination d on d.id = dl.destination_id
-    where dl.id = any (array(select first_waiting_of_each_route()))
+    where dl.id = any (array(select deliveries_free_to_go(now(), sqlc.arg(batch_size)::int)))
       and dl.state = 'pending'
       and dl.next_attempt_at <= now()
       and (dl.leased_until is null or dl.leased_until <= now())
@@ -169,8 +206,8 @@ from delivery where state = 'pending';
 -- name: NotifyWork :exec
 select pg_notify('charon_work', '');
 
--- Only the first waiting delivery of a route can go, so only it says when there
--- is work. Counting the ones behind it would wake the dispatcher over and over
+-- Only what may go says when there is work. Counting what waits behind the
+-- first delivery of a route catching up would wake the dispatcher over and over
 -- while the first waits out a retry.
 -- name: NextWorkAt :one
 with next as (
@@ -178,9 +215,10 @@ with next as (
         (select min(dl.next_attempt_at)
          from delivery dl
          join destination d on d.id = dl.destination_id and d.enabled
-         where dl.id = any (array(select first_waiting_of_each_route()))),
-        -- A route in flight holds what is behind it until the attempt is
-        -- recorded, or until its lease runs out because the worker died.
+         where dl.id = any (array(select deliveries_free_to_go('infinity', 1)))),
+        -- What is in flight holds a route catching up until the attempt is
+        -- recorded, and is claimed again when its lease runs out because the
+        -- worker died.
         (select min(flying.leased_until)
          from delivery flying
          join destination d on d.id = flying.destination_id and d.enabled

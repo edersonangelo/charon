@@ -703,11 +703,12 @@ templ routesPage(routes []console.RouteRow, unrouted []console.UnroutedProvider,
 		<section>
 			<h2>Configured</h2>
 			<p class="muted">
-				A route delivers its events in the order they arrived, one at a time: the next
-				goes once the one before it was delivered or gave up. Switching a destination back
-				on delivers what arrived while it was off. Changing where a route points does not
-				resend: what went to the old address stays delivered, and resend is how you send
-				it again.
+				A route delivers side by side. Given a past to deliver — a new route that delivers
+				what was recorded, a destination switched back on, an address corrected — it
+				catches up in the order the events arrived, one at a time, with whatever arrives
+				meanwhile waiting behind, and then goes back to side by side. Changing where a
+				route points does not resend: what went to the old address stays delivered, and
+				resend is how you send it again.
 			</p>
 			if len(routes) == 0 {
 				<p class="muted">No route. Nothing is delivered until a provider has one.</p>

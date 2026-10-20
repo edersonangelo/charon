@@ -41,6 +41,10 @@ func (s *Store) Force(
 		return 0, ErrNothingToForce
 	}
 
+	if err := s.markRoutesCaughtUp(ctx); err != nil {
+		return 0, err
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("beginning the override transaction: %w", err)
